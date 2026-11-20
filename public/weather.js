@@ -64,9 +64,9 @@ function cloudTexture(random, warm) {
 function drawClouds(ctx, texture, w, h, time, warm) {
   if (!texture) return;
   const shift = Math.sin(time * .22) * w * .085;
-  ctx.globalAlpha = warm ? .66 : .95;
+  ctx.globalAlpha = warm ? .56 : .76;
   ctx.drawImage(texture, -w * .38 + shift, -h * .22 + time * h * .007, w * 1.8, h * .99);
-  ctx.globalAlpha = warm ? .38 : .7;
+  ctx.globalAlpha = warm ? .33 : .51;
   ctx.drawImage(texture, -w * .22 - shift * .55, h * .27 - time * h * .007, w * 1.6, h * .76);
   ctx.globalAlpha = 1;
 }
@@ -128,7 +128,7 @@ export function mountDayWeather(host, day) {
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
   const accent = day.palette?.find(color => /^#[\da-f]{6}$/i.test(color)) || '#767969';
   const texture = context && ['warm_haze','mist'].includes(sky) ? cloudTexture(random, sky === 'warm_haze') : null;
-  const particles = Array.from({length: 92}, () => ({ x: random(), y: random(), phase: random() * tau, depth: random() }));
+  const particles = Array.from({length: 190}, () => ({ x: random(), y: random(), phase: random() * tau, depth: random() }));
   let width = 0, height = 0, visible = [], frame = 0, timer = 0, last = -Infinity, done = false;
   let sizeObserver;
   const start = performance.now();
@@ -150,11 +150,12 @@ export function mountDayWeather(host, day) {
   function size() {
     const rect = host.getBoundingClientRect();
     width = Math.round(rect.width); height = Math.round(rect.height);
-    const ratio = Math.min(window.devicePixelRatio || 1, 1.5, 1600 / Math.max(1, height));
+    // The weather texture remains soft at a lower resolution on ultrawide screens.
+    const ratio = Math.min(window.devicePixelRatio || 1, 1.5, Math.sqrt(2400000 / Math.max(1, width * height)));
     canvas.width = Math.max(1, Math.round(width * ratio));
     canvas.height = Math.max(1, Math.round(height * ratio));
     context?.setTransform(ratio, 0, 0, ratio, 0, 0);
-    visible = particles.slice(0, Math.max(16, Math.min(92, Math.round(width * height / (sky === 'rain_glass' ? 5200 : 10300)))));
+    visible = particles.slice(0, Math.max(16, Math.round(width * height / (sky === 'rain_glass' ? 6800 : 12500))));
     paint(reduced.matches ? 0 : (performance.now() - start) / 1000);
   }
   function destroy() {

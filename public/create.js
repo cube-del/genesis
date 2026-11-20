@@ -1,5 +1,7 @@
 import { api, esc, icon, navigate, toast } from './ui.js';
 import { analyzeDay, fileData, localTrack, pickTrack } from './analysis.js';
+import { chooseGooglePhotos } from './google-photos.js';
+import { chooseFolderPhotos, imageTypes, maxPhotoBytes } from './photo-folder.js';
 
 let dispose;
 export function cleanupCreate() { dispose?.(); dispose = null; }
@@ -9,9 +11,8 @@ const todayLocal = () => {
   const d = new Date();
   return [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')].join('-');
 };
-const imageTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/avif', 'image/gif']);
 const audioTypes = new Set(['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/ogg', 'audio/mp4', 'audio/x-m4a', 'audio/aac', 'audio/flac', 'audio/x-flac', 'audio/webm']);
-const maxPhotoBytes = 12 * 1024 * 1024, maxAudioBytes = 24 * 1024 * 1024;
+const maxAudioBytes = 24 * 1024 * 1024;
 const photoLimit = 5;
 const nextFrame = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
@@ -29,16 +30,18 @@ export async function renderCreate(root) {
     '<div class="compose-field"><label for="c-date">Дата дня</label><input type="date" id="c-date" min="0001-01-01" max="' + now + '" value="' + now + '" required></div>' +
     '<div class="compose-field"><label for="c-text">Что запомнилось?</label><textarea id="c-text" maxlength="10000" required rows="5" placeholder="Расскажите о месте, человеке или одном моменте дня…"></textarea><span class="compose-count" id="c-count">0 / 10 000</span></div>' +
     '<div class="compose-field"><div class="compose-label">Фотографии <small id="c-photo-count">0 / 5</small></div><input class="compose-sr" type="file" id="c-photos" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" multiple tabindex="-1"><button type="button" class="compose-drop" id="c-drop">' +
-    '<span class="compose-upload-icon">' + symbol('upload', 21) + '</span><strong>Добавить фотографии</strong><span>Перетащите сюда или выберите с устройства</span><small>От 1 до 5 снимков · до 12 МБ каждый</small></button><div id="c-thumbs" class="compose-thumbs"></div><p class="compose-error" id="c-photo-error" role="alert"></p></div>' +
+    '<span class="compose-upload-icon">' + symbol('upload', 21) + '</span><strong>Добавить фотографии</strong><span>Перетащите сюда или выберите с устройства</span><small>От 1 до 5 снимков · до 12 МБ каждый</small></button>' +
+    '<div class="compose-imports"><button type="button" id="c-google">' + symbol('image', 17) + ' Из Google Фото</button><button type="button" id="c-folder-button">' + symbol('folder', 17) + ' Из папки</button></div>' +
+    '<input type="file" id="c-folder" webkitdirectory multiple hidden><div id="c-thumbs" class="compose-thumbs"></div><p class="compose-error" id="c-photo-error" role="alert"></p></div>' +
     '<div class="compose-field"><div class="compose-label" id="c-sound-title">Музыка дня</div><div class="compose-choice" role="radiogroup" aria-labelledby="c-sound-title"><label><input type="radio" name="trackMode" value="auto" checked><span>' + symbol('spark', 16) + ' Автоподбор</span></label><label><input type="radio" name="trackMode" value="manual"><span>' + symbol('music', 16) + ' Свой трек</span></label></div>' +
-    '<p id="c-auto-note" class="compose-note">Подберём фрагмент по настроению или создадим оригинальную композицию.</p>' +
+    '<p id="c-auto-note" class="compose-note">Подберём трек из Spotify по настроению и ритму вашего дня.</p>' +
     '<div id="c-manual" hidden><div class="compose-source"><label><input type="radio" name="source" value="file" checked> Аудиофайл</label><label><input type="radio" name="source" value="link"> Ссылка</label></div>' +
     '<label class="compose-audio-pick" id="c-audio-label"><input type="file" class="compose-sr" id="c-audio" accept="audio/*,.mp3,.m4a,.wav,.ogg,.flac"><span>' + symbol('upload', 17) + ' <span id="c-audio-name">Выберите аудио до 24 МБ</span></span></label>' +
     '<label id="c-link-label" class="compose-link" hidden><span>Ссылка на песню</span><input type="url" id="c-url" placeholder="https://…"><small>Песня откроется по ссылке. Для реакции на звук загрузите аудиофайл.</small></label></div><p class="compose-error" id="c-audio-error" role="alert"></p></div>' +
     '<label class="compose-voice"><span class="compose-voice-icon">' + symbol('mic', 20) + '</span><span><strong>Озвучить запись</strong><small>Прочитать рассказ голосом устройства</small></span><input type="checkbox" id="c-voice" checked><span class="compose-switch" aria-hidden="true"></span></label>' +
-    '</fieldset><p id="c-error" class="compose-error" role="alert"></p><div class="compose-progress" hidden id="c-progress" role="status" aria-live="polite"></div>' +
+    '</fieldset><p id="c-ai-note" class="compose-note" role="status">Проверяем, где будет выполнен ИИ-анализ…</p><p id="c-error" class="compose-error" role="alert"></p><div class="compose-progress" hidden id="c-progress" role="status" aria-live="polite"></div>' +
     '<button class="compose-submit" type="submit">Сохранить день ' + symbol('arrow', 19) + '</button></form>' +
-    '<aside class="compose-aside"><div class="compose-preview"><div class="compose-preview-top"><span>ОБЛОЖКА ДНЯ</span><span>4:5</span></div><div class="compose-paper" id="c-paper"><div class="compose-empty" id="c-empty"><span>' + symbol('photo', 34) + '</span><small>Место для первого кадра</small></div><img id="c-preview-img" alt="Предпросмотр первого снимка" hidden><div class="compose-paper-text"><small id="c-preview-date"></small><p id="c-preview-quote" hidden></p></div></div><p class="compose-preview-foot">' + symbol('lock', 13) + ' Только для вас</p></div></aside></div></section>';
+    '<aside class="compose-aside"><div class="compose-preview"><div class="compose-preview-top"><span>ОБЛОЖКА ДНЯ</span><span>4:5</span></div><div class="compose-paper" id="c-paper"><div class="compose-empty" id="c-empty"><span>' + symbol('photo', 34) + '</span><small>Место для первого кадра</small></div><img id="c-preview-img" alt="Предпросмотр первого снимка" hidden><div class="compose-paper-text"><small id="c-preview-date"></small><p id="c-preview-cover-text" hidden></p></div></div><p class="compose-preview-foot">' + symbol('lock', 13) + ' Только для вас</p></div></aside></div></section>';
 
   const el = id => root.querySelector('#c-' + id);
   const form = root.querySelector('#compose-form'), fields = root.querySelector('#compose-fields');
@@ -46,19 +49,41 @@ export async function renderCreate(root) {
   const listen = (element, event, handler) => element.addEventListener(event, handler, { signal: ctrl.signal });
   const mode = name => form.elements[name].value;
   const error = (scope, value = '') => { el(scope).textContent = value; };
+  let expectedProvider = null;
+  let lastAnalysis;
+  async function loadProvider() {
+    const status = await api('/api/atmosphere/status', { signal: ctrl.signal });
+    if (!active) return;
+    expectedProvider = status.analysisSource;
+    el('ai-note').textContent = expectedProvider === 'gemini'
+      ? 'При сохранении Google Gemini получит рассказ и уменьшенные снимки, чтобы определить настроение и погоду и сократить текст для обложки.'
+      : status.ready
+        ? 'На вашем компьютере ИИ определит настроение и погоду и сократит рассказ до фразы для обложки.'
+        : 'Для локального анализа один раз установите модель командой python scripts/local_ai_setup.py. После установки день можно сохранить.';
+  }
+  const providerReady = loadProvider().catch(() => {
+    if (active) el('ai-note').textContent = 'Не удалось проверить настройки ИИ. При сохранении попробуем ещё раз.';
+  });
+
+  function cachedAnalysis(date, text) {
+    if (lastAnalysis?.date === date && lastAnalysis.text === text && lastAnalysis.photos.length === photos.length &&
+        photos.every((photo, index) => photo === lastAnalysis.photos[index])) return lastAnalysis.result;
+  }
 
   function showPreview() {
     const image = el('preview-img');
     image.hidden = !photos.length;
     el('empty').hidden = Boolean(photos.length);
     el('paper').classList.toggle('has-photo', Boolean(photos.length));
-    if (photos.length) image.src = photos[0].src;
+    if (photos.length) {
+      if (image.getAttribute('src') !== photos[0].src) image.src = photos[0].src;
+    }
     else image.removeAttribute('src');
     const date = el('date').value;
     el('preview-date').textContent = date ? new Date(date + 'T12:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
-    const text = el('text').value.trim().replace(/\s+/g, ' ');
-    el('preview-quote').hidden = !text;
-    el('preview-quote').textContent = text.length > 84 ? text.slice(0, 82).trimEnd() + '…' : text;
+    const caption = cachedAnalysis(date, el('text').value.trim())?.coverText || '';
+    el('preview-cover-text').hidden = !caption;
+    el('preview-cover-text').textContent = caption;
     el('count').textContent = el('text').value.length.toLocaleString('ru-RU') + ' / 10 000';
   }
   function drawPhotos() {
@@ -69,20 +94,39 @@ export async function renderCreate(root) {
     el('photo-count').textContent = photos.length + ' / 5';
     showPreview();
   }
-  async function addPhotos(raw) {
-    if (!raw.length || reading || sending) return;
+  function updateImportButtons() {
+    const full = photos.length >= photoLimit;
+    el('drop').disabled = full || reading;
+    el('google').disabled = full || reading;
+    el('folder-button').disabled = full || reading;
+  }
+  async function addPhotos(raw, { batch = false, skipped = 0 } = {}) {
+    if (reading || sending || !active) return;
     error('photo-error');
     const files = Array.from(raw);
+    if (!files.length) {
+      if (batch) error('photo-error', 'Подходящих снимков нет. Выберите JPEG, PNG, WebP, GIF или AVIF до 12 МБ.');
+      return;
+    }
     if (files.length + photos.length > photoLimit) { error('photo-error', 'Можно добавить до пяти снимков. Сейчас осталось мест: ' + (photoLimit - photos.length) + '.'); return; }
-    const invalid = files.find(f => !imageTypes.has(f.type) || f.size > maxPhotoBytes || !f.size);
+    const invalid = files.find(f => f instanceof File && (!imageTypes.has(f.type) || f.size > maxPhotoBytes || !f.size));
     if (invalid) { error('photo-error', 'Проверьте «' + invalid.name + '». Нужен JPEG, PNG, WebP, GIF или AVIF до 12 МБ.'); return; }
-    reading = true; el('drop').setAttribute('aria-busy', 'true'); submit.disabled = true;
+    reading = true; updateImportButtons(); el('drop').setAttribute('aria-busy', 'true'); submit.disabled = true;
     try {
-      const added = await Promise.all(files.map(async f => ({ name: f.name, src: await fileData(f) })));
-      await Promise.all(added.map(async p => { const img = new Image(); img.src = p.src; await img.decode(); }));
-      if (active) { photos = photos.concat(added); drawPhotos(); }
+      const results = await Promise.allSettled(files.map(async file => {
+        const src = file instanceof File ? await fileData(file) : file.src;
+        const img = new Image(); img.src = src; await img.decode();
+        return { name: file.name, src };
+      }));
+      const added = results.filter(r => r.status === 'fulfilled').map(r => r.value);
+      if (!added.length || (!batch && added.length !== files.length)) throw Error();
+      if (active) {
+        photos = photos.concat(added); drawPhotos();
+        skipped += files.length - added.length;
+        if (skipped) error('photo-error', 'Добавлено снимков — ' + added.length + '. Пропущено файлов — ' + skipped + ' (формат, размер или ошибка чтения).');
+      }
     } catch { if (active) error('photo-error', 'Не удалось открыть один из снимков. Попробуйте JPEG или PNG.'); }
-    finally { reading = false; if (active) { el('drop').removeAttribute('aria-busy'); submit.disabled = false; } }
+    finally { reading = false; if (active) { updateImportButtons(); el('drop').removeAttribute('aria-busy'); submit.disabled = false; } }
   }
   function showMusicFields() {
     const manual = mode('trackMode') === 'manual', link = mode('source') === 'link';
@@ -95,6 +139,16 @@ export async function renderCreate(root) {
   listen(el('date'), 'change', showPreview);
   listen(el('drop'), 'click', () => el('photos').click());
   listen(el('photos'), 'change', e => { const files = [...e.target.files]; e.target.value = ''; addPhotos(files); });
+  const openFolder = () => el('folder').click();
+  listen(el('folder-button'), 'click', openFolder);
+  listen(el('folder'), 'change', e => {
+    const files = [...e.target.files]; e.target.value = '';
+    if (files.length) chooseFolderPhotos(files, photoLimit - photos.length, (chosen, skipped) => addPhotos(chosen, { batch: true, skipped }));
+  });
+  listen(el('google'), 'click', () => chooseGooglePhotos({
+    limit: photoLimit - photos.length, onFolder: openFolder,
+    onPhotos: (chosen, skipped) => addPhotos(chosen, { batch: true, skipped: skipped.length })
+  }));
   listen(el('drop'), 'dragenter', e => { e.preventDefault(); dragLevel++; el('drop').classList.add('is-over'); });
   listen(el('drop'), 'dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
   listen(el('drop'), 'dragleave', e => { e.preventDefault(); if (!--dragLevel) el('drop').classList.remove('is-over'); });
@@ -105,7 +159,7 @@ export async function renderCreate(root) {
     const { remove, from, to } = button.dataset;
     if (remove !== undefined) photos.splice(Number(remove), 1);
     if (from !== undefined && Number(to) >= 0 && Number(to) < photos.length) [photos[from], photos[to]] = [photos[to], photos[from]];
-    drawPhotos(); error('photo-error');
+    drawPhotos(); updateImportButtons(); error('photo-error');
   });
   for (const choice of form.querySelectorAll('input[type="radio"]')) listen(choice, 'change', showMusicFields);
   listen(el('audio'), 'change', e => {
@@ -117,11 +171,12 @@ export async function renderCreate(root) {
     }
     el('audio-name').textContent = trackFile?.name || 'Выберите аудио до 24 МБ';
   });
-  const stages = ['Извлекаем палитру снимков', 'Определяем настроение и погоду', 'Собираем звуковую дорожку', 'Сохраняем папку дня'];
+  const stages = ['Извлекаем палитру снимков', 'ИИ анализирует день и пишет фразу для обложки', 'Подбираем трек Spotify', 'Сохраняем папку дня'];
   function progress(index) {
     const node = el('progress');
     node.hidden = false;
-    node.innerHTML = '<span>' + esc(stages[index]) + '…</span><div aria-hidden="true">' + stages.map((_, i) => '<i class="' + (i <= index ? 'done' : '') + '"></i>').join('') + '</div>';
+    const label = index === 2 && mode('trackMode') === 'manual' ? 'Добавляем ваш трек' : stages[index];
+    node.innerHTML = '<span>' + esc(label) + '…</span><div aria-hidden="true">' + stages.map((_, i) => '<i class="' + (i <= index ? 'done' : '') + '"></i>').join('') + '</div>';
   }
   listen(form, 'submit', async e => {
     e.preventDefault();
@@ -139,23 +194,33 @@ export async function renderCreate(root) {
     sending = true; fields.disabled = true; submit.disabled = true; form.setAttribute('aria-busy', 'true');
     try {
       progress(0); await nextFrame();
-      const signals = await analyzeDay(text, photos);
+      await providerReady;
       if (!active) return;
-      progress(1); await nextFrame();
+      if (!expectedProvider) {
+        await loadProvider();
+        if (!active) return;
+        if (expectedProvider === 'gemini') throw Error('Для анализа настроен Google Gemini. Прочитайте пояснение над кнопкой и подтвердите сохранение.');
+      }
       const date = el('date').value, voice = el('voice').checked;
+      let signals = cachedAnalysis(date, text);
+      if (!signals) {
+        signals = await analyzeDay(text, photos, { date, expectedProvider, signal: ctrl.signal, onPrepared: () => progress(1) });
+        if (!active) return;
+        lastAnalysis = { date, text, photos: [...photos], result: signals };
+        showPreview();
+      }
       const prior = await history;
       if (!active) return;
       progress(2); await nextFrame();
       let track;
-      if (!manual) track = await pickTrack({ ...signals, date, recentTracks: Array.isArray(prior) ? prior.slice(0, 8).map(d => d.track).filter(Boolean) : [] });
+      if (!manual) track = await pickTrack({ ...signals, date, recentTracks: Array.isArray(prior) ? prior.slice(0, 8).map(d => d.track).filter(Boolean) : [] }, null, ctrl.signal);
       else if (link) track = { kind: 'link', url: url.href, title: 'Песня с ' + url.hostname.replace(/^www\./, ''), artist: 'Ваша ссылка', bpm: null, reason: 'Вы прикрепили ссылку на песню. Она открывается в музыкальном сервисе.' };
       else track = await localTrack(trackFile);
       if (!active) return;
       track.title = track.title.slice(0, 200); track.artist = track.artist.slice(0, 200);
-      if (track.reason) signals.explanation.push(track.reason);
-      if (Number.isFinite(track.energy)) signals.energy = boundEnergy(signals.energy * 0.6 + track.energy * 0.4);
       progress(3); await nextFrame();
-      const day = await api('/api/days', { method: 'POST', body: { ...signals, date, text, photos, track, voice }, signal: ctrl.signal });
+      const explanation = track.reason ? [...signals.explanation, track.reason] : signals.explanation;
+      const day = await api('/api/days', { method: 'POST', body: { ...signals, explanation, date, text, photos, track, voice }, signal: ctrl.signal });
       if (!active) return;
       toast('День сохранён'); navigate('/day/' + encodeURIComponent(day.id));
     } catch (failure) {
@@ -169,5 +234,3 @@ export async function renderCreate(root) {
   });
   showMusicFields(); showPreview();
 }
-
-const boundEnergy = x => Math.max(0, Math.min(1, x));

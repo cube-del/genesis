@@ -15,8 +15,8 @@ const example = {
   explanation: ['Тихий ритм текста.'], voice: false
 };
 
-async function listen(dir, publicDir) {
-  const server = await createDaytraceServer({ vaultDir: dir, publicDir });
+async function listen(dir, publicDir, options) {
+  const server = await createDaytraceServer({ vaultDir: dir, publicDir, ...options });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', resolve);
@@ -36,7 +36,7 @@ async function listen(dir, publicDir) {
     close: () => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); })
   };
 }
-async function fixture(t, seed = false) {
+async function fixture(t, seed = false, options) {
   const workspace = await mkdtemp(path.join(tmpdir(), 'daytrace-test-'));
   const dir = path.join(workspace, 'vault');
   const publicDir = path.join(workspace, 'public');
@@ -47,7 +47,7 @@ async function fixture(t, seed = false) {
     const demos = Array.from({ length: 6 }, (_, i) => ({ ...example, id: 'sample-' + i, photos: [{name: 'seed.png', src:'/images/seed.png'}] }));
     await writeFile(path.join(publicDir, 'demo.json'), JSON.stringify(demos));
   }
-  const client = await listen(dir, publicDir);
+  const client = await listen(dir, publicDir, options);
   t.after(async () => { await client.close(); await rm(workspace, { recursive: true, force: true }); });
   return { client, dir, publicDir };
 }
@@ -67,6 +67,68 @@ function unzip(archive) {
   assert.equal(archive.readUInt32LE(archive.length - 22), 0x06054b50);
   return files;
 }
+
+test('импорт Google Фото ограничивает выбор, сохраняет байты выбранных фото и закрывает сессию', async t => {
+  const calls = [];
+  const { client } = await fixture(t, false, { googlePhotosClientId: 'test-client', googlePhotosFetch: async (address, options) => {
+    const url = new URL(address);
+    assert.equal(options.headers.Authorization, 'Bearer selected-photos-token');
+    calls.push(url.pathname);
+    if (url.pathname === '/v1/sessions') {
+      assert.deepEqual(JSON.parse(options.body), { pickingConfig: { maxItemCount: '3' } });
+      return Response.json({ id: 'pick-1', pickerUri: 'https://photos.google.com/picker/session' });
+    }
+    if (url.pathname === '/v1/sessions/pick-1') return Response.json(options.method === 'DELETE' ? {} : { mediaItemsSet: true });
+    if (url.pathname === '/v1/mediaItems') {
+      assert.equal(url.searchParams.get('sessionId'), 'pick-1');
+      if (url.searchParams.has('pageToken')) return Response.json({ mediaItems: [{ type: 'VIDEO', mediaFile: { filename: 'clip.mov' } }] });
+      return Response.json({ nextPageToken: 'page2', mediaItems: [
+        { type: 'PHOTO', mediaFile: { filename: 'наш день.png', baseUrl: 'https://lh3.googleusercontent.com/picture' } },
+        { type: 'PHOTO', mediaFile: { filename: 'big.jpg', baseUrl: 'https://lh3.googleusercontent.com/big' } }
+      ] });
+    }
+    if (url.pathname === '/big=d') return new Response('large', { headers: { 'content-length': String(13 * 1024 * 1024) } });
+    if (url.href === 'https://lh3.googleusercontent.com/picture=d') return Response.redirect('https://lh3.googleusercontent.com/content', 302);
+    assert.equal(url.href, 'https://lh3.googleusercontent.com/content');
+    return new Response(Buffer.from(image, 'base64'));
+  } });
+  const base = '/api/google-photos/sessions', auth = { authorization: 'Bearer selected-photos-token' };
+  assert.equal((await client.request('/api/google-photos/config')).status, 403);
+  await client.request('/');
+  assert.deepEqual(await (await client.request('/api/google-photos/config')).json(), { clientId: 'test-client' });
+  assert.equal((await client.request(base, 'POST', { limit: 5 })).status, 401);
+  assert.equal((await client.request(base, 'POST', { limit: 6 }, auth)).status, 400);
+  assert.equal((await client.request(base, 'POST', { limit: 3 }, { ...auth, origin: 'https://example.org' })).status, 403);
+  const session = await (await client.request(base, 'POST', { limit: 3 }, auth)).json();
+  const path = base + '/' + session.id;
+  assert.deepEqual(await (await client.request(path, 'GET', undefined, auth)).json(), { mediaItemsSet: true });
+  const result = await (await client.request(path + '/photos', 'GET', undefined, auth)).json();
+  assert.deepEqual(result, { photos: [{ name: 'наш день.png', src: 'data:image/png;base64,' + image }], skipped: ['big.jpg', 'clip.mov'] });
+  assert.equal((await client.request('/api/days', 'POST', { ...example, photos: result.photos })).status, 201);
+  assert.equal((await client.request(path, 'DELETE', undefined, auth)).status, 200);
+  assert.equal(calls.at(-1), '/v1/sessions/pick-1');
+});
+
+test('анализ атмосферы доступен владельцу и учитывает показанного в форме провайдера', async t => {
+  let calls = 0;
+  const { client } = await fixture(t, false, { atmosphereAnalyzer(input, { signal }) {
+    calls++;
+    assert.equal(input.text, example.text);
+    assert.equal(signal.aborted, false);
+    return { mood: 'dream', weatherType: 'rain_glass' };
+  } });
+  assert.equal((await client.request('/api/atmosphere', 'POST', { text: example.text })).status, 403);
+  await client.request('/');
+  const { analysisSource } = await (await client.request('/api/atmosphere/status')).json();
+  assert.ok(['local-model','gemini'].includes(analysisSource));
+  const stale = await client.request('/api/atmosphere', 'POST', { text: example.text, expectedProvider: 'previous' });
+  assert.equal(stale.status, 409);
+  assert.equal(calls, 0);
+  const result = await client.request('/api/atmosphere', 'POST', { text: example.text, expectedProvider: analysisSource });
+  assert.deepEqual(await result.json(), { mood: 'dream', weatherType: 'rain_glass', analysisSource });
+  assert.equal(calls, 1);
+  assert.deepEqual(await (await client.request('/api/days')).json(), []);
+});
 
 test('первая загрузка импортирует шесть папок, повторный запуск сохраняет изменения', async t => {
   const { client, dir, publicDir } = await fixture(t, true);
@@ -88,7 +150,8 @@ test('первая загрузка импортирует шесть папок
 test('создание папки, оригинал, частичное чтение и переносимый ZIP', async t => {
   const { client, dir } = await fixture(t);
   await client.request('/');
-  const created = await client.request('/api/days', 'POST', example);
+  const coverText = 'У реки под прохладным ветром';
+  const created = await client.request('/api/days', 'POST', { ...example, coverText });
   assert.equal(created.status, 201);
   const day = await created.json();
   const media = await client.request(day.photos[0].src, 'GET', undefined, { Range: 'bytes=0-7' });
@@ -105,9 +168,13 @@ test('создание папки, оригинал, частичное чтен
   assert.deepEqual(files.get(passport.photos[0].src), Buffer.from(image, 'base64'));
   assert.equal(passport.photos[0].name, 'река.png');
   assert.equal(passport.track.title, example.track.title);
+  assert.equal(day.coverText, coverText);
+  assert.equal(passport.coverText, coverText);
+  assert.equal(passport.quote, example.quote);
   const postcard = files.get('memory.html').toString();
   assert.ok(postcard.includes('src="photos/01.png"'));
   assert.ok(postcard.includes(example.title));
+  assert.ok(postcard.includes('<p class="cover-caption">' + coverText + '</p>'));
   assert.ok(postcard.includes('data:text/javascript;base64,'));
 });
 
@@ -118,6 +185,7 @@ test('озвученная открытка переносится в ZIP с WAV
   assert.ok(day.id);
   const archive = unzip(Buffer.from(await (await client.request('/api/days/' + day.id + '/zip')).arrayBuffer()));
   const page = archive.get('memory.html').toString();
+  assert.ok(page.includes('<blockquote class="cover-caption">«' + example.quote + '»</blockquote>'));
   assert.ok(page.includes('id="voice"'));
   assert.ok(page.includes('SpeechSynthesisUtterance'));
   if (day.voiceSrc) {
@@ -137,6 +205,46 @@ test('частичная запись не остаётся на диске по
   }
   assert.deepEqual(await readdir(dir), []);
   assert.deepEqual(await (await client.request('/api/days')).json(), []);
+});
+
+test('паспорт сохраняет источник анализа, ID трека и источник Spotify после создания, смены и перезапуска', async t => {
+  const {client, dir, publicDir} = await fixture(t);
+  await client.request('/');
+  const original = {
+    kind:'link', title:'Friday Morning', artist:'Khruangbin', bpm:null,
+    id:'недоверенное значение', url:'https://open.spotify.com/track/2M45IIrFLjMgsNSSxee31h?si=test', source:'spotify-catalog'
+  };
+  const day = await (await client.request('/api/days', 'POST', {...example, analysisSource:'gemini', track:original})).json();
+  assert.equal(day.analysisSource,'gemini');
+  assert.equal(day.track.id,'2M45IIrFLjMgsNSSxee31h');
+  assert.equal(day.track.source,'spotify-catalog');
+  assert.equal(day.track.url,'https://open.spotify.com/track/' + day.track.id);
+  const changeUrl = '/api/days/' + day.id + '/track';
+  const invalid = await client.request(changeUrl,'PUT',{track:{...original, url:'https://example.org/sample'}});
+  assert.equal(invalid.status,400);
+  const next = {kind:'link',title:'Cirrus',artist:'Bonobo',bpm:null,url:'https://open.spotify.com/track/2t805HJ6cLjFfxstV88h5G',source:'spotify-api'};
+  const updated = await (await client.request(changeUrl,'PUT',{track:next})).json();
+  assert.equal(updated.track.id,'2t805HJ6cLjFfxstV88h5G');
+  assert.equal(updated.track.source,'spotify-api');
+  assert.equal(updated.analysisSource,'gemini');
+  const {track,analysisSource} = JSON.parse(unzip(Buffer.from(await (await client.request('/api/days/' + day.id + '/zip')).arrayBuffer())).get('memory.json'));
+  assert.equal(track.source,'spotify-api');
+  assert.equal(analysisSource,'gemini');
+  const manual = await (await client.request('/api/days','POST',{ ...example, analysisSource:'local-model', track:{kind:'link',url:'https://example.org/concert',title:'Концерт',artist:'Автор',bpm:null} })).json();
+  assert.equal(manual.analysisSource,'local-model');
+  assert.ok(!manual.track.id && !manual.track.source);
+  // An older passport retains its origin metadata and recovers its canonical ID.
+  const folders = await readdir(dir);
+  const pathname = path.join(dir,folders.find(name => name.endsWith(day.id.slice(0,8))),'memory.json');
+  const legacy = JSON.parse(await readFile(pathname,'utf8'));
+  delete legacy.track.id;
+  await writeFile(pathname,JSON.stringify(legacy));
+  const restarted = await listen(dir,publicDir);
+  try {
+    const recovered = await (await restarted.request('/api/days/' + day.id)).json();
+    assert.equal(recovered.track.id,updated.track.id);
+    assert.equal(recovered.track.source,'spotify-api');
+  } finally { await restarted.close(); }
 });
 
 test('загруженная аудиодорожка попадает в ZIP, замена обновляет и портативную открытку', async t => {

@@ -1,9 +1,11 @@
 import { api, dateLabel, esc, icon, modal, moods, navigate, shareDialog, toast } from './ui.js';
-import { audioLevel, elapsedSeconds, playingDay, playTrack, progress, recordingAudio, setDucking, stopTrack } from './media.js';
+import { audioLevel, elapsedSeconds, playingDay, playTrack, progress, recordingAudio, setDucking, spotifyLinks, stopTrack } from './media.js';
+import { mountSpotifyPlayer } from './spotify.js';
 import { pickTrack } from './analysis.js';
 import { mountDeck } from './deck.js';
 import { mountDayWeather, skyFor } from './weather.js';
-import { photoPatina } from './patina.js';
+import { archivePatina } from './patina.js';
+import { drawPostcardDesign } from './postcard.js';
 
 const looks = {
   calm: { index: 0, name: 'Тихий минимализм', filter: 'saturate(.80) contrast(.96)' },
@@ -30,7 +32,7 @@ const vertex = `attribute vec2 pos; varying vec2 uv;
 void main(){uv=pos*.5+.5;gl_Position=vec4(pos,0.,1.);}`;
 const fragment = `precision mediump float;
 varying vec2 uv; uniform sampler2D photo; uniform vec2 crop, offset, texel;
-uniform vec3 tint; uniform float art, weather, t, loud, patina;
+uniform vec3 tint; uniform float art, weather, t, loud;
 float noise(vec2 p){return fract(sin(dot(p,vec2(12.9898,78.233)))*4375.5453);}
 void main(){
  vec2 p=vec2(uv.x,1.-uv.y);
@@ -52,10 +54,6 @@ void main(){
  else if(weather<2.5){vec2 v=vec2(p.x*106.+p.y*10.,p.y*5.-t*(.8+.5*loud));float drop=smoothstep(.98,1.,fract(v.x))*smoothstep(.72,1.,fract(v.y+noise(vec2(floor(v.x),0.))));c+=vec3(.13)*drop;}
  else if(weather<3.5){float line=pow(max(0.,sin(p.y*250.+t*2.)),18.)*max(0.,sin(p.x*9.+p.y*24.+t*1.4));c+=vec3(.03)*line;}
  else{float light=pow(max(0.,1.-distance(p,vec2(.8+.1*sin(t*.2),.07))*.98),3.);c+=vec3(.05,.044,.032)*light;}
- c=mix(c,vec3(dot(c,vec3(.213,.715,.072))),patina*.96);
- vec3 sepia=vec3(dot(c,vec3(.393,.769,.189)),dot(c,vec3(.349,.686,.168)),dot(c,vec3(.272,.534,.131)));
- c=mix(c,sepia,patina*.86);
- c=((c-.5)*(1.-patina*.31)+.5)*(1.+patina*.23);
  gl_FragColor=vec4(clamp(c,0.,1.),1.);
 }`;
 
@@ -77,7 +75,7 @@ function shaderSurface() {
   const buffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
   const attr = gl.getAttribLocation(program, 'pos'); gl.enableVertexAttribArray(attr); gl.vertexAttribPointer(attr, 2, gl.FLOAT, false, 0, 0);
-  const loc = Object.fromEntries(['crop','offset','texel','tint','art','weather','t','loud','patina'].map(key => [key,gl.getUniformLocation(program,key)]));
+  const loc = Object.fromEntries(['crop','offset','texel','tint','art','weather','t','loud'].map(key => [key,gl.getUniformLocation(program,key)]));
   const textures = new Map();
   function useTexture(img) {
     const cached = textures.get(img);
@@ -111,7 +109,7 @@ function shaderSurface() {
     return uploaded;
   }
   return {
-    draw(img, w, h, time, level, day, camera={zoom:1,x:0,y:0}, patina=0) {
+    draw(img, w, h, time, level, day, camera={zoom:1,x:0,y:0}) {
       if (gl.isContextLost()) return null;
       if (surface.width !== w || surface.height !== h) { surface.width = w; surface.height = h; gl.viewport(0, 0, w, h); }
       const texture = useTexture(img);
@@ -122,7 +120,6 @@ function shaderSurface() {
       gl.uniform2f(loc.offset,clamp(camera.x*x,(x-1)/2,(1-x)/2),clamp(camera.y*y,(y-1)/2,(1-y)/2));
       const c = cssColor(day.palette?.[0]); gl.uniform3f(loc.tint,parseInt(c.slice(1,3),16)/255,parseInt(c.slice(3,5),16)/255,parseInt(c.slice(5,7),16)/255);
       gl.uniform1f(loc.art,lookFor(day).index); gl.uniform1f(loc.weather,weatherIndex(day)); gl.uniform1f(loc.t,time%400); gl.uniform1f(loc.loud,level);
-      gl.uniform1f(loc.patina,patina);
       gl.drawArrays(gl.TRIANGLE_STRIP,0,4); return surface;
     },
     dispose() { for(const {tex} of textures.values())gl.deleteTexture(tex); textures.clear(); gl.deleteBuffer(buffer); gl.deleteProgram(program); shaders.forEach(s => gl.deleteShader(s)); gl.getExtension('WEBGL_lose_context')?.loseContext(); }
@@ -165,20 +162,19 @@ function drawWeather(ctx, width, height, type, time, sound) {
 }
 
 function cameraAt(seconds, photoIndex, energy, sound) {
-  const cycle = seconds * (.34 + energy * .13) + photoIndex * 2.3 - .8;
+  const cycle = seconds * (.095 + energy * .023) + photoIndex * 2.3 - .8;
   return {
-    zoom: 1.13 + .085 * (1 - Math.cos(cycle)) / 2 + sound * .017,
-    x: .08 * Math.sin(cycle),
-    y: .036 * Math.sin(cycle + .7)
+    zoom: 1.04 + .018 * (1 - Math.cos(cycle)) / 2 + sound * .0015,
+    x: .017 * Math.sin(cycle),
+    y: .008 * Math.sin(cycle + .7)
   };
 }
 
-function scene(canvas, day, {onPhoto, onProgress, reducedMotion, dayPatina}) {
+function scene(canvas, day, {onPhoto, onProgress, reducedMotion}) {
   canvas.width = 880; canvas.height = 1100;
   const ctx = canvas.getContext('2d',{alpha:false});
   let shader = shaderSurface(), frame = 0, running = true, visible = true, recording = false;
   let playing = !reducedMotion.matches, time = 0, lastFrame = null, current = null, outgoing = null;
-  let patina = 0, developing = null;
   let nextPhotoAt = Infinity, nextIndex = 0, selection = 0, pending = false;
   const decoded = new Map();
   const photos = day.photos;
@@ -192,33 +188,27 @@ function scene(canvas, day, {onPhoto, onProgress, reducedMotion, dayPatina}) {
   }) : null;
   visibility?.observe(canvas);
   const W=canvas.width, H=canvas.height, margin=54;
+  const ornament = document.createElement('canvas');
+  ornament.width = W; ornament.height = H;
+  drawPostcardDesign(ornament.getContext('2d'), W, H, day.mood);
   const colors=day.palette || []; const ink = cssColor(colors[0]);
   const shade = ctx.createLinearGradient(0,H*.32,0,H); shade.addColorStop(0,'rgba(0,0,0,0)'); shade.addColorStop(.42,'rgba(0,0,0,.15)'); shade.addColorStop(1,'rgba(0,0,0,.76)');
   const topShade = ctx.createLinearGradient(0,0,0,H*.23); topShade.addColorStop(0,'rgba(0,0,0,.38)'); topShade.addColorStop(1,'rgba(0,0,0,0)');
-  const quote = String(day.quote || day.title).slice(0,260).trim();
-  const isSans=day.mood==='energy'; let fontSize=isSans?62:68, quoteLines, quoteFont;
+  const caption = day.coverText || String(day.quote || day.title).slice(0,260).trim();
+  const isSans=day.mood==='energy'; let fontSize=isSans?62:68, captionLines, captionFont;
   do {
-    quoteFont=`${isSans?'600':'italic'} ${fontSize}px ${isSans?'Arial, sans-serif':'Georgia, serif'}`;
-    ctx.font=quoteFont;quoteLines=linesFor(ctx,quote,W-margin*2);
-    if(quoteLines.length<=5 || fontSize<=38)break;
+    captionFont=`${isSans?'600':'italic'} ${fontSize}px ${isSans?'Arial, sans-serif':'Georgia, serif'}`;
+    ctx.font=captionFont;captionLines=linesFor(ctx,caption,W-margin*2);
+    if(captionLines.length<=5 || fontSize<=38)break;
     fontSize-=4;
   } while(true);
-  const lineHeight=fontSize*1.09, quoteBottom=H-138, shortDate=stamp(day.date);
-  function setPatina(target, duration=550, delay=0) {
-    if(reducedMotion.matches || target===patina){
-      patina=target;
-      developing=null;
-    }else{
-      developing={from:patina,to:target,start:performance.now()+delay,duration};
-    }
-    if(current)paint();
-  }
+  const lineHeight=fontSize*1.09, captionBottom=H-138, shortDate=stamp(day.date);
   function drawShot(shot, sound) {
     const {image,index,started} = shot;
     const camera = cameraAt((time-started)/1000,index,energy,sound);
     const seconds = time/1000;
     let art;
-    try { art = shader?.draw(image,W,H,seconds,sound,day,camera,patina); }
+    try { art = shader?.draw(image,W,H,seconds,sound,day,camera); }
     catch { shader?.dispose(); shader=null; }
     if (art) { ctx.drawImage(art,0,0); return; }
 
@@ -227,18 +217,13 @@ function scene(canvas, day, {onPhoto, onProgress, reducedMotion, dayPatina}) {
     const x = clamp((W-width)/2-camera.x*W,W-width,0);
     const y = clamp((H-height)/2-camera.y*H,H-height,0);
     ctx.save();
-    ctx.filter=lookFor(day).filter+(patina ? ` saturate(${1-patina*.96}) sepia(${patina*.86}) contrast(${1-patina*.31}) brightness(${1+patina*.23})` : '');
+    ctx.filter=lookFor(day).filter;
     ctx.drawImage(image,x,y,width,height);
     ctx.filter='none';
     drawWeather(ctx,W,H,weatherIndex(day),seconds,sound);
     ctx.restore();
   }
   function paint() {
-    if(developing){
-      const p=clamp((performance.now()-developing.start)/developing.duration,0,1);
-      patina=developing.from+(developing.to-developing.from)*p*p*(3-2*p);
-      if(p===1)developing=null;
-    }
     const sound = (playing || recording) && playingDay()===day.id ? audioLevel() : 0;
     if (current) {
       const fade = outgoing ? clamp((time-current.started)/fadeLength(),0,1) : 1;
@@ -253,11 +238,12 @@ function scene(canvas, day, {onPhoto, onProgress, reducedMotion, dayPatina}) {
       ctx.fillRect(0,0,W,H);
     }
     ctx.fillStyle=shade; ctx.fillRect(0,0,W,H); ctx.fillStyle=topShade; ctx.fillRect(0,0,W,H);
+    ctx.drawImage(ornament, 0, 0);
     ctx.fillStyle='#fffaf4'; ctx.textBaseline='alphabetic'; ctx.textAlign='left';
     ctx.font='600 28px Arial, sans-serif'; ctx.fillText('DayTrace',margin,78);
     ctx.font='22px Arial, sans-serif'; ctx.fillText(shortDate,margin,112);
-    ctx.font=quoteFont;
-    quoteLines.forEach((line,i,array)=>ctx.fillText(line,margin,quoteBottom-(array.length-i-1)*lineHeight,W-margin*2));
+    ctx.font=captionFont;
+    captionLines.forEach((line,i,array)=>ctx.fillText(line,margin,captionBottom-(array.length-i-1)*lineHeight,W-margin*2));
     ctx.fillStyle='rgba(255,255,255,.54)'; ctx.fillRect(margin,H-91,W-margin*2,1);
     ctx.fillStyle='#fffcf7'; ctx.font='25px Arial, sans-serif'; ctx.fillText(weatherLabel(day),margin,H-48,W*.6);
     colors.slice(0,5).forEach((color,i,array)=>{ctx.beginPath();ctx.arc(W-margin-10-(array.length-i-1)*25,H-57,9,0,Math.PI*2);ctx.fillStyle=cssColor(color);ctx.fill();ctx.strokeStyle='rgba(255,255,255,.68)';ctx.lineWidth=1.4;ctx.stroke();});
@@ -285,20 +271,16 @@ function scene(canvas, day, {onPhoto, onProgress, reducedMotion, dayPatina}) {
     nextPhotoAt=time+shotLength();
     if (withSequence) load(nextIndex);
     if (!image) return false;
-    if (!current) {
-      patina=dayPatina;
-      setPatina(0,2400,400);
-    }
     outgoing=current?.image!==image && (playing || recording) ? current : null;
     current={image,index,started:time};
+    paint();
     onPhoto(index);
     onProgress(0);
-    paint();
     return true;
   }
   function loop(ms) {
     if (!running) return;
-    if (!document.hidden && (recording || (visible && (playing || developing)))) {
+    if (!document.hidden && (recording || (visible && playing))) {
       if (lastFrame===null) lastFrame=ms;
       if (ms-lastFrame>=32) {
         if(playing || recording)time+=Math.min(ms-lastFrame,120);
@@ -327,7 +309,7 @@ function scene(canvas, day, {onPhoto, onProgress, reducedMotion, dayPatina}) {
         paint();
       }
     },
-    select, setPatina,
+    select,
     stop(){ running=false; ++selection;visibility?.disconnect();cancelAnimationFrame(frame);shader?.dispose();decoded.clear();current=null;outgoing=null; }
   };
 }
@@ -381,11 +363,20 @@ function openLoupe(day, initial) {
 
 function xray(day) {
   const explanations = Array.isArray(day.explanation) ? day.explanation : [];
+  const track=day.track || {};
+  const spotify=spotifyLinks(track);
+  let music=track.reason || explanations[3] || '';
+  if(spotify) {
+    music=spotify.automatic
+      ? (track.reason || 'Трек Spotify подобран по настроению и энергии записи.')
+      : 'Вы прикрепили песню из Spotify. Она открывается во встроенном плеере.';
+  } else if(track.kind==='link') music='Вы прикрепили ссылку на песню в музыкальном сервисе.';
+  else music=(music+' Во время воспроизведения кадр слегка откликается на низкие частоты.').trim();
   const entries = [
     ['file-text','Текст',explanations[0] || `Интонация записи определила настроение «${moods[day.mood]?.label || day.mood}». В центре сцены — фраза из вашего рассказа.`],
     ['image','Фотографии',explanations[1] || `Палитра собрана из ${day.photos.length===1?'оттенков фотографии':'оттенков фотографий'} дня. Их цвет сохраняется в художественной обработке.`],
     ['sun','Эмоциональная погода',explanations[2] || `Поверх снимка появляется эффект «${weatherLabel(day)}». Его характер связан с освещением и текстом дня.`],
-    ['headphones','Музыка',day.track?.kind==='link'?'Вы выбрали внешнюю ссылку. Песня открывается на странице исполнителя.':`${day.track?.reason || explanations[3] || ''} При воспроизведении громкость низких частот меняет приближение кадра.`.trim()]
+    ['headphones','Музыка',music]
   ];
   modal('Почему день выглядит так?',`<div class="dt-xray"><div class="dt-xray-mood"><div><span>Интонация дня</span><strong>${esc(moods[day.mood]?.label || day.mood)}</strong></div><div class="dt-axes"><label>Теплота <b>${percent(day.warmth)}</b></label><i style="--amount:${percent(day.warmth)}"></i><label>Энергия <b>${percent(day.energy)}</b></label><i style="--amount:${percent(day.energy)}"></i></div></div>
     ${entries.map(([name,label,detail])=>`<section class="dt-xray-row"><div class="dt-xray-icon">${icon(name,19)}</div><div><h3>${label}</h3><p>${esc(detail)}</p>${label==='Фотографии'?`<div class="dt-swatches">${paletteHTML(day.palette)}</div>`:''}</div></section>`).join('')}
@@ -401,20 +392,22 @@ function external(url) {try {const resolved=new URL(url);return ['https:','http:
 function clockValue(seconds) {return `0:${String(Math.max(0,Math.floor(seconds))).padStart(2,'0')}`;}
 
 function trackBody(day,readOnly) {
-  const track=day.track || {}, url=external(track.url), metadata=[];
-  if(track.kind==='ambient') metadata.push('Генеративная композиция');
-  if(track.kind==='preview') metadata.push('Фрагмент из каталога');
-  if(track.kind==='file') metadata.push('Ваш аудиофайл');
-  if(track.kind==='link') metadata.push('Ваша ссылка');
+  const track=day.track || {}, spotify=spotifyLinks(track), url=spotify?.url || external(track.url), metadata=[];
+  if(spotify) metadata.push(spotify.automatic?'Автоподбор из Spotify':'Ваша ссылка на Spotify');
+  else if(track.kind==='ambient') metadata.push('Генеративная композиция');
+  else if(track.kind==='preview') metadata.push('Фрагмент из каталога');
+  else if(track.kind==='file') metadata.push('Ваш аудиофайл');
+  else if(track.kind==='link') metadata.push('Ваша ссылка');
   if(track.bpm>0) metadata.push(`${Math.round(track.bpm)} BPM`);
   if(track.mode==='major'||track.mode==='minor')metadata.push(track.mode==='major'?'Мажор':'Минор');
   const waves=Array.from({length:44},(_,i)=>`<i style="--height:${22+Math.round(59*Math.abs(Math.sin(i*1.43)*Math.sin(.38*i+.45)))+8*Math.sin(.2*i)}%"></i>`).join('');
-  const playable=track.kind==='ambient'||Boolean(track.src);
+  const playable=!spotify && (track.kind==='ambient'||Boolean(track.src));
   return `<section class="dt-sound"><div class="dt-section-title">${icon('headphones',17)}<h2>Звук дня</h2></div>
   <div class="dt-track"><div class="dt-sleeve" style="--cover-one:${cssColor(day.palette?.[0])};--cover-two:${cssColor(day.palette?.[2])}"><div></div></div><div><h3>${esc(track.title||'Музыка дня')}</h3><p>${esc(track.artist||'DayTrace')}</p></div></div>
   ${playable?`<div class="dt-player"><button class="dt-play" type="button" data-act="play" aria-label="Воспроизвести фрагмент">${icon('play',18)}</button><div class="dt-wave" aria-hidden="true">${waves}</div><output data-time>0:00</output></div>`:''}
+  ${spotify?`<div data-spotify-player><div data-spotify-frame></div><p class="dt-spotify-status" role="status">Запускаем Spotify…</p></div>`:''}
   <p class="dt-track-meta">${metadata.map(esc).join(' · ')}</p>${track.reason?`<p class="dt-reason">${esc(track.reason)}</p>`:''}
-  ${url||!readOnly?`<div class="dt-track-links">${url?`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">Открыть трек ${icon('external-link',14)}</a>`:''}${readOnly?'':`<button type="button" data-act="reroll">${icon('refresh-cw',14)} Другой трек</button>`}</div>`:''}</section>`;
+  ${url||!readOnly?`<div class="dt-track-links">${url?`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${spotify?'Открыть в Spotify':'Открыть трек'} ${icon('external-link',14)}</a>`:''}${readOnly?'':`<button type="button" data-act="reroll">${icon('refresh-cw',14)} Другой трек</button>`}</div>`:''}</section>`;
 }
 
 function tabPanel(day, name) {
@@ -431,37 +424,56 @@ export async function renderDay(root, day, {readOnly=false, back='/', days=[day]
   cleanupDay();stopTrack();
   let index=0, speaking=false, voiceAudio=null, voiceSequence=0, live=true, rerolling=false, recorder=null, recordStream=null, clipTimer, clockFrame=0, capturing=false, clipDeadline=0, preferSilent=false;
   const signals=new AbortController();
-  const dayPatina=photoPatina(day.date,extraDays);
-  const fresh=dayPatina<.001;
+  const initialFade=archivePatina(day.date,extraDays).toFixed(4);
+  const clipHasSound=()=>!spotifyLinks(day.track) && ['ambient','file'].includes(day.track?.kind);
+  const clipLabel=()=>clipHasSound()?'Видео · 15 с':'Видео · 15 с без звука';
   root.innerHTML=`<article class="dt-page"><div data-weather-layer aria-hidden="true"></div><div class="dt-day-nav">${back?`<button class="dt-back" type="button" data-act="back">${icon('arrow-left',17)} ${readOnly && back==='/'?'На главную':'В архив'}</button>`:''}
   ${readOnly?'':`<div class="dt-day-actions"><button class="button secondary" type="button" data-act="share">${icon('share',16)} Поделиться</button><a class="button secondary" href="/api/days/${encodeURIComponent(day.id)}/zip" download>${icon('download',16)} Скачать ZIP</a></div>`}</div>
   <header class="dt-heading"><p>${esc(dateLabel(day.date))}<span></span>${esc(moods[day.mood]?.label || day.mood)}</p><h1>${esc(day.title)}</h1></header>
-  <div class="dt-layout"><section class="dt-art-column" aria-label="Живая открытка дня"><div data-deck></div><div class="dt-stage"><canvas role="img" aria-label="${esc(day.quote || day.title)}"></canvas><button class="dt-motion" type="button" data-act="motion" disabled></button>${day.photos.length>1?'<div class="dt-shot-progress" aria-hidden="true"></div>':''}<div class="dt-image-error" hidden>Фотография недоступна</div></div>
+  <div class="dt-layout"><section class="dt-art-column patina-card" style="--fade:${initialFade}" aria-label="Живая открытка дня"><div data-deck></div><div class="dt-stage"><canvas role="img" aria-label="${esc(day.coverText || day.quote || day.title)}"></canvas><button class="dt-motion" type="button" data-act="motion" disabled></button>${day.photos.length>1?'<div class="dt-shot-progress" aria-hidden="true"></div>':''}<div class="dt-image-error" hidden>Фотография недоступна</div></div>
   <div class="dt-under-stage"><button class="dt-text-action" type="button" data-act="loupe">${icon('zoom-in',17)} Рассмотреть фото</button>${day.photos.length>1?`<div class="dt-photo-index"><button class="icon-button" type="button" data-step="-1" aria-label="Предыдущее фото">${icon('chevron-left',16)}</button><span data-index>1 / ${day.photos.length}</span><button class="icon-button" type="button" data-step="1" aria-label="Следующее фото">${icon('chevron-right',16)}</button></div>`:''}</div>
   </section><aside class="dt-sidebar"><div class="dt-meta-panel"><div class="dt-section-title">${icon('layers',17)}<h2>Атмосфера дня</h2></div>
   <div class="dt-meta-line"><span>Погода</span><button class="dt-weather-replay" data-act="weather" type="button" title="Повторить погоду дня" aria-label="Повторить погоду дня · ${esc(weatherLabel(day))}">${esc(weatherLabel(day))} ${icon('refresh-cw',13)}</button></div><div class="dt-meta-line"><span>Стиль</span><strong>${esc(lookFor(day).name)}</strong></div>
   <div class="dt-meta-line"><span>Палитра</span><div class="dt-swatches">${paletteHTML(day.palette)}</div></div>
-  <div class="dt-meta-line"><span id="age-preview-label">Выцветание</span>${fresh?'<span>Свежая запись</span>':'<button class="switch-control dt-age-switch" role="switch" aria-checked="false" aria-labelledby="age-preview-label" title="Показать снимок таким, как в архиве" type="button" data-act="patina"><span></span></button>'}</div>
   <button type="button" class="dt-xray-button" data-act="xray">${icon('scan',17)} Почему день выглядит так?</button></div>
   <div data-sound>${trackBody(day,readOnly)}</div>
   ${day.voice && (day.voiceSrc || 'speechSynthesis' in window)?`<button type="button" class="dt-voice" data-act="voice">${icon('volume-2',18)} <span>Послушать цитату</span></button>`:''}
-  ${readOnly?'':`<div class="dt-export"><div class="dt-section-title"><h2>Сохранить открытку</h2></div><div class="dt-export-actions"><button class="button secondary" type="button" data-act="png">${icon('image',16)} PNG</button><button class="button secondary" type="button" data-act="clip">${icon('film',16)} <span>Видео · 15 с</span></button></div><p role="status" data-record-status hidden></p></div>`}
+  ${readOnly?'':`<div class="dt-export"><div class="dt-section-title"><h2>Сохранить открытку</h2></div><div class="dt-export-actions"><button class="button secondary" type="button" data-act="png">${icon('image',16)} PNG</button><button class="button secondary" type="button" data-act="clip">${icon('film',16)} <span>${clipLabel()}</span></button></div><p role="status" data-record-status hidden></p></div>`}
   </aside></div><section class="dt-folder"><div class="dt-section-title">${icon('folder',19)}<h2>В папке дня</h2></div>
   <div class="dt-tabs" role="tablist" aria-label="Содержимое папки">${[['text','Текст записи'],['photos',`Оригиналы · ${day.photos.length}`],['files','Файлы']].map(([key,label],i)=>`<button type="button" id="dt-tab-${key}" role="tab" aria-controls="dt-tab-panel" aria-selected="${!i}" tabindex="${i?-1:0}" data-tab="${key}">${label}</button>`).join('')}</div>
   <div id="dt-tab-panel" class="dt-tab-panel" role="tabpanel" aria-labelledby="dt-tab-text">${tabPanel(day,'text')}</div></section></article>`;
 
   const find=q=>root.querySelector(q);
+  let spotifyPlayer;
+  function mountDayMusic() {
+    const host = find('[data-spotify-player]');
+    if (host) spotifyPlayer = mountSpotifyPlayer(host, day.track, spotifyLinks(day.track));
+  }
+  mountDayMusic();
   const deckHost=find('[data-deck]');
   const weatherHost=find('[data-weather-layer]');
   let weather=mountDayWeather(weatherHost,day);
-  const deck=mountDeck(deckHost,{day,days,extraDays,readOnly,onPickDay,onPickPhoto:showPhoto});
+  const deck=mountDeck(deckHost,{day,days,readOnly,onPickDay,onPickPhoto:showPhoto});
+  const postcard=find('.dt-art-column');
   const canvas=find('.dt-stage canvas');
   const motionButton=find('[data-act=motion]');
   const shotProgress=find('.dt-shot-progress');
   const reduce=matchMedia('(prefers-reduced-motion: reduce)');
+  let colorReveal;
+  function revealPostcard(){
+    if(!postcard.classList.contains('patina-card'))return;
+    const archived=getComputedStyle(postcard).filter;
+    postcard.classList.remove('patina-card');
+    if(!reduce.matches && postcard.animate){
+      colorReveal=postcard.animate([{filter:archived},{filter:'none'}],{
+        duration:2400, delay:150, fill:'backwards', easing:'ease-in-out'
+      });
+    }
+  }
   const art=scene(canvas,day,{
-    reducedMotion:reduce, dayPatina,
+    reducedMotion:reduce,
     onPhoto(selected){
+      revealPostcard();
       index=selected;
       deck.selectPhoto(index);
       const counter=find('.dt-photo-index [data-index]');
@@ -479,23 +491,24 @@ export async function renderDay(root, day, {readOnly=false, back='/', days=[day]
   }
   function setMotion(playing){art.setPlaying(playing);motionState();}
   motionState();
-  reduce.addEventListener('change',event=>setMotion(!event.matches),{signal:signals.signal});
+  reduce.addEventListener('change',event=>{
+    if(event.matches)colorReveal?.cancel();
+    setMotion(!event.matches);
+  },{signal:signals.signal});
   function musicState(){
     if(!live)return;
     const active=playingDay()===day.id, button=find('[data-act=play]');
     if(button){button.innerHTML=icon(active?'pause':'play',18);button.setAttribute('aria-label',active?'Остановить фрагмент':'Воспроизвести фрагмент');}
-    if(active && find('[data-act=patina]')?.getAttribute('aria-checked')==='true') setAgePreview(false);
     find('.dt-player')?.classList.toggle('is-playing',active);
-  }
-  function setAgePreview(enabled){
-    find('[data-act=patina]')?.setAttribute('aria-checked',String(enabled));
-    art.setPatina(enabled?dayPatina:0);
   }
   async function showPhoto(i){
     const ok=await art.select((i+day.photos.length)%day.photos.length);
     if(live && ok===false){
       if(art.ready)toast('Фотография недоступна.');
-      else find('.dt-image-error').hidden=false;
+      else {
+        find('.dt-image-error').hidden=false;
+        revealPostcard();
+      }
     }
   }
   function setTab(key){
@@ -512,6 +525,7 @@ export async function renderDay(root, day, {readOnly=false, back='/', days=[day]
   }
   async function say(){
     if(speaking){stopVoice();return;}
+    spotifyPlayer?.pause();
     const seq=++voiceSequence;
     speaking=true;setDucking(true);find('[data-act=voice] span').textContent='Остановить голос';
     function synthesized(){
@@ -534,7 +548,11 @@ export async function renderDay(root, day, {readOnly=false, back='/', days=[day]
       const candidate=await pickTrack(day,day.track);if(!live)return;
       const updated=await api(`/api/days/${encodeURIComponent(day.id)}/track`,{method:'PUT',body:{track:candidate}});
       const next=updated?.track||candidate;day.track=next;if(!live)return;
-      stopTrack(); find('[data-sound]').innerHTML=trackBody(day,readOnly);if(find('[data-tab=files]').getAttribute('aria-selected')==='true')setTab('files');toast('Музыка дня обновлена.');
+      stopTrack(); spotifyPlayer?.destroy(); spotifyPlayer=null;
+      if(speaking)stopVoice();
+      find('[data-sound]').innerHTML=trackBody(day,readOnly);mountDayMusic();
+      find('[data-act=clip] span').textContent=clipLabel();
+      if(find('[data-tab=files]').getAttribute('aria-selected')==='true')setTab('files');toast('Музыка дня обновлена.');
     } catch(err){if(live)toast(err.message || 'Не удалось заменить трек.');}
     finally{rerolling=false;if(button.isConnected){button.disabled=false;button.innerHTML=`${icon('refresh-cw',14)} Другой трек`;}}
   }
@@ -550,10 +568,11 @@ export async function renderDay(root, day, {readOnly=false, back='/', days=[day]
     if(capturing||readOnly)return;
     if(!art.ready){toast('Дождитесь загрузки фотографии.');return;}
     if(typeof MediaRecorder==='undefined'||!canvas.captureStream){toast('Запись видео недоступна в этом браузере. Можно сохранить PNG.');return;}
-    capturing=true;deckHost.inert=true;preferSilent=!(day.track?.kind==='ambient'||day.track?.kind==='file');
+    capturing=true;deckHost.inert=true;preferSilent=!clipHasSound();
     for(const btn of root.querySelectorAll(recordLock))btn.disabled=true;
     try {
       if(speaking)stopVoice();
+      spotifyPlayer?.pause();
       stopTrack(); if(!preferSilent){const ok=await playTrack(day,musicState);if(!ok||!live){endRecordingUI();return;}musicState();}
       if(!live){endRecordingUI();return;}
       recordStream=canvas.captureStream(24);
@@ -596,7 +615,6 @@ export async function renderDay(root, day, {readOnly=false, back='/', days=[day]
         case 'share':if(!readOnly)await shareDialog(day.id);break;
         case 'xray':xray(day);break;
         case 'weather':weather.destroy();weather=mountDayWeather(weatherHost,day);break;
-        case 'patina':setAgePreview(button.getAttribute('aria-checked')!=='true');break;
         case 'motion':setMotion(!art.playing);break;
         case 'loupe':openLoupe(day,index);break;
         case 'voice':await say();break;
@@ -607,7 +625,7 @@ export async function renderDay(root, day, {readOnly=false, back='/', days=[day]
       }
     }catch(err){if(live)toast(err.message||'Не удалось выполнить действие.');}
   },{signal:signals.signal});
-  clean=()=>{live=false;signals.abort();weather.destroy();deck.destroy();cancelAnimationFrame(clockFrame);art.stop();clearTimeout(clipTimer);
+  clean=()=>{live=false;signals.abort();colorReveal?.cancel();spotifyPlayer?.destroy();weather.destroy();deck.destroy();cancelAnimationFrame(clockFrame);art.stop();clearTimeout(clipTimer);
     if(recorder?.state==='recording'){recorder.onstop=null;recorder.stop();}endRecordingUI();stopVoice();stopTrack();};
   clockFrame=requestAnimationFrame(tick);await showPhoto(0);
 }

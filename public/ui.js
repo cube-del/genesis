@@ -80,7 +80,7 @@ export function navigate(path) {
   if(location.pathname+location.search+location.hash!==path) history.pushState({},'',path);
   window.dispatchEvent(new PopStateEvent('popstate'));
 }
-let toastTimer, returnFocus, modalKey;
+let toastTimer, returnFocus, modalKey, modalClosed;
 export function toast(message) {
   const box=document.querySelector('#notifications');
   clearTimeout(toastTimer); box.textContent=message; box.classList.add('visible');
@@ -91,11 +91,14 @@ export function closeModal() {
   if(!host.firstChild) return;
   document.removeEventListener('keydown',modalKey);
   host.replaceChildren(); document.body.classList.remove('modal-open');
+  const closed=modalClosed;
+  modalClosed=null;
+  closed?.();
   if(returnFocus?.isConnected) returnFocus.focus({preventScroll:true});
   returnFocus=null;
 }
-export function modal(title,html,{wide=false}={}) {
-  closeModal(); returnFocus=document.activeElement;
+export function modal(title,html,{wide=false,onClose}={}) {
+  closeModal(); returnFocus=document.activeElement; modalClosed=onClose;
   const host=document.querySelector('#modal-root');
   host.innerHTML='<div class="overlay"><section class="modal '+(wide?'wide':'')+'" role="dialog" aria-modal="true" aria-labelledby="dialog-title"><div class="modal-top"><h2 id="dialog-title">'+esc(title)+'</h2><button class="icon-button close-dialog" aria-label="Закрыть">'+icon('x')+'</button></div><div class="modal-body">'+html+'</div></section></div>';
   const overlay=host.firstElementChild;

@@ -1,7 +1,8 @@
 import {icon,esc,api,navigate,modal,closeModal,shareDialog,toast,dateLabel,moods} from './ui.js';
-import {playTrack,stopTrack,playingDay} from './media.js';
+import {playTrack,stopTrack,playingDay,spotifyLinks} from './media.js';
+import {showSpotifyPlayer} from './spotify.js';
 
-import {photoPatina} from './patina.js';
+import {archivePatina} from './patina.js';
 
 const main=document.querySelector('#main');
 const header=document.querySelector('#site-header');
@@ -16,7 +17,7 @@ function savedAge(){
 const prefs={filter:'all',sort:'date',age:savedAge()};
 const ageLabel=()=>prefs.age?'+'+prefs.age+' дн.':'Сейчас';
 function ageAttributes(day){
-  return 'data-age-date="'+esc(day.date)+'" style="--fade:'+photoPatina(day.date,prefs.age).toFixed(4)+'"';
+  return 'data-age-date="'+esc(day.date)+'" style="--fade:'+archivePatina(day.date,prefs.age).toFixed(4)+'"';
 }
 let allDays=[], currentSet=[], heroOrder=[], heroIndex=0, routeVersion=0, dispose=null, shared=false, favorites=false, basePath='/';
 const brand='<img src="/mark.svg" alt="" width="37" height="37"><span>DayTrace</span>';
@@ -40,15 +41,17 @@ function palette(day) {
 function dayUrl(id){return shared?basePath+'?day='+encodeURIComponent(id):'/day/'+encodeURIComponent(id)}
 function heroMarkup() {
   const day=heroOrder[heroIndex];if(!day)return '';
+  const coverText = day.coverText || '«' + day.quote.replace(/[.!?…]$/,'') + '»';
   const label=heroOrder.length>1?'<div class="reel-nav"><span aria-live="polite">'+num(heroIndex+1)+' <em>/</em> '+num(heroOrder.length)+'</span><button class="reel-button" data-hero-step="-1" aria-label="Предыдущее воспоминание">'+icon('chevron-left',19)+'</button><button class="reel-button" data-hero-step="1" aria-label="Следующее воспоминание">'+icon('chevron-right',19)+'</button></div>':'';
-  return '<article class="hero" data-frame="'+esc(day.id)+'" aria-label="Воспоминание в фокусе"><div class="hero-film patina-photo" '+ageAttributes(day)+'><img class="hero-photo" fetchpriority="high" src="'+esc(day.photos[0].src)+'" alt=""></div><div class="hero-shade"></div><div class="hero-grain" aria-hidden="true"></div><div class="focus-tag">'+icon('scan',14)+'В фокусе</div><div class="hero-details"><div class="hero-date">'+dateLabel(day.date)+'<b></b>'+icon(weatherIcon(day),15)+' '+esc(day.weather)+'</div><h2>'+esc(day.title)+'</h2><p class="hero-quote">«'+esc(day.quote.replace(/[.!?…]$/,''))+'»</p><div class="hero-actions"><a data-nav href="'+dayUrl(day.id)+'" class="button hero-open">Открыть день '+icon('arrow-up-right',16)+'</a><button type="button" class="hero-audio" data-sound="'+esc(day.id)+'" aria-label="Послушать '+esc(day.track.title)+'"><span class="audio-ring">'+icon('play',13)+'</span><span class="hero-track-name">'+esc(day.track.title)+'</span></button></div></div>'+label+'</article>';
+  return '<article class="hero patina-card" '+ageAttributes(day)+' data-frame="'+esc(day.id)+'" aria-label="Воспоминание в фокусе"><img class="hero-photo" fetchpriority="high" src="'+esc(day.photos[0].src)+'" alt=""><div class="hero-shade"></div><div class="hero-grain" aria-hidden="true"></div><div class="focus-tag">'+icon('scan',14)+'В фокусе</div><div class="hero-details"><div class="hero-date">'+dateLabel(day.date)+'<b></b>'+icon(weatherIcon(day),15)+' '+esc(day.weather)+'</div><h2>'+esc(day.title)+'</h2><p class="hero-quote">'+esc(coverText)+'</p><div class="hero-actions"><a data-nav href="'+dayUrl(day.id)+'" class="button hero-open">Открыть день '+icon('arrow-up-right',16)+'</a><button type="button" class="hero-audio" data-sound="'+esc(day.id)+'" aria-label="Послушать '+esc(day.track.title)+'"><span class="audio-ring">'+icon('play',13)+'</span><span class="hero-track-name">'+esc(day.track.title)+'</span></button></div></div>'+label+'</article>';
 }
 function card(day){
   const state=moods[day.mood]||moods.calm;
-  return '<article class="memory-tile" data-card="'+esc(day.id)+'" '+ageAttributes(day)+'><div class="tile-frame"><a class="image-link" data-nav href="'+dayUrl(day.id)+'" aria-label="Открыть '+esc(day.title)+'"><img class="patina-photo" loading="lazy" src="'+esc(day.photos[0].src)+'" alt="'+esc(day.title)+'"></a>'+
+  const musicLabel=spotifyLinks(day.track)?'Spotify':day.track.bpm?Math.round(day.track.bpm)+' BPM':'Аудио';
+  return '<article class="memory-tile patina-card" data-card="'+esc(day.id)+'" '+ageAttributes(day)+'><div class="tile-frame"><a class="image-link" data-nav href="'+dayUrl(day.id)+'" aria-label="Открыть '+esc(day.title)+'"><img loading="lazy" src="'+esc(day.photos[0].src)+'" alt="'+esc(day.title)+'"></a>'+
   '<span class="weather-chip">'+icon(weatherIcon(day),14)+esc(day.weather)+'</span>'+
   (!shared?'<button class="save-day '+(day.favorite?'saved':'')+'" data-save="'+esc(day.id)+'" aria-pressed="'+!!day.favorite+'" aria-label="'+(day.favorite?'Убрать из избранного':'В избранное')+'">'+icon('bookmark',17)+'</button>':'')+
-  '<span class="tile-palette">'+palette(day)+'</span></div><div class="tile-meta"><time datetime="'+day.date+'">'+dateLabel(day.date)+'</time><span style="--mood-color:'+state.color+'">'+esc(state.label)+'</span></div><h3><a data-nav href="'+dayUrl(day.id)+'">'+esc(day.title)+'</a></h3><div class="tile-audio"><button data-sound="'+esc(day.id)+'" title="Послушать фрагмент" aria-label="Послушать '+esc(day.track.title)+'"><span class="tile-play">'+icon('play',11)+'</span><span>'+esc(day.track.title)+'</span></button><span>'+icon('waveform',15)+' '+(day.track.bpm?Math.round(day.track.bpm)+' BPM':'Аудио')+'</span></div></article>';
+  '<span class="tile-palette">'+palette(day)+'</span></div><div class="tile-meta"><time datetime="'+day.date+'">'+dateLabel(day.date)+'</time><span style="--mood-color:'+state.color+'">'+esc(state.label)+'</span></div><h3><a data-nav href="'+dayUrl(day.id)+'">'+esc(day.title)+'</a></h3><div class="tile-audio"><button data-sound="'+esc(day.id)+'" aria-label="Послушать '+esc(day.track.title)+'"><span class="tile-play">'+icon('play',11)+'</span><span>'+esc(day.track.title)+'</span></button><span>'+icon('waveform',15)+' '+musicLabel+'</span></div></article>';
 }
 function updateGrid(){
   let list=currentSet.filter(d=>prefs.filter==='all'||prefs.filter===d.mood);
@@ -69,7 +72,7 @@ function renderArchive(){
   main.innerHTML='<div class="archive-heading"><div><h1>'+title+'</h1><p>'+(favorites?'Дни, к которым хочется вернуться.':'Личный дневник в фотографиях, цвете и звуке.')+'</p></div>'+shareButton+'</div>'+
   (!favorites && heroOrder.length?'<div id="featured">'+heroMarkup()+'</div>':'')+
   '<section class="collection"><div class="collection-head"><div class="collection-label"><span class="collection-glyph" aria-hidden="true">'+icon('grid',21)+'</span><h2>'+(favorites?'Сохранённые дни':'Коллекция дней')+'</h2><span class="count" id="visible-count"></span></div><div class="collection-tools"><button class="time-button '+(prefs.age?'time-active':'')+'" data-time aria-label="Ход времени" aria-controls="archive-time-controls" aria-expanded="false">'+icon('time',16)+'<span>'+(prefs.age?ageLabel():'Ход времени')+'</span></button><span class="tool-divider"></span><label class="sort-control">'+icon('sort',17)+'<select aria-label="Сортировка">'+Object.entries(sortNames).map(([k,v])=>'<option value="'+k+'" '+(prefs.sort===k?'selected':'')+'>'+v+'</option>').join('')+'</select>'+icon('chevron-down',13)+'</label></div></div>'+
-  '<div id="archive-time-controls" class="archive-time-controls" hidden><label for="patina-range">Выцветание снимков</label><div class="age-slider"><span>Сейчас</span><input id="patina-range" type="range" min="0" max="365" value="'+prefs.age+'"><span>Через год</span></div><output for="patina-range">'+ageLabel()+'</output></div>'+
+  '<div id="archive-time-controls" class="archive-time-controls" hidden><label for="patina-range">Выцветание открыток</label><div class="age-slider"><span>Сейчас</span><input id="patina-range" type="range" min="0" max="365" value="'+prefs.age+'"><span>Через год</span></div><output for="patina-range">'+ageLabel()+'</output></div>'+
   '<div class="mood-filters" role="group" aria-label="Настроение дня">'+[['all',{label:'Все дни'}],...Object.entries(moods)].map(([key,m])=>'<button class="mood-filter '+(key===prefs.filter?'selected':'')+'" data-filter="'+key+'" aria-pressed="'+(key===prefs.filter)+'">'+(m.icon?icon(m.icon,15):'')+m.label+'</button>').join('')+'</div><div class="days-grid" id="day-grid"></div></section>'+
   '<footer class="archive-footer"><span><img src="/mark.svg" width="18" alt="">DayTrace</span><span>'+icon(shared?'link':'lock',13)+(shared?'Архив по ссылке':'Личный архив')+'</span></footer>';
   if(!allDays.length){
@@ -88,7 +91,7 @@ function updateAge(event){
   button.classList.toggle('time-active',Boolean(prefs.age));
   button.querySelector('span').textContent=prefs.age?label:'Ход времени';
   main.querySelectorAll('[data-age-date]').forEach(el=>{
-    el.style.setProperty('--fade',photoPatina(el.dataset.ageDate,prefs.age).toFixed(4));
+    el.style.setProperty('--fade',archivePatina(el.dataset.ageDate,prefs.age).toFixed(4));
   });
 }
 function toggleTimeControls(button){
@@ -102,13 +105,14 @@ function refreshSound(){
   main.querySelectorAll('[data-sound]').forEach(b=>{
     const on=id===b.dataset.sound;
     const mark=b.querySelector('.audio-ring,.tile-play');if(mark)mark.innerHTML=icon(on?'pause':'play',b.classList.contains('hero-audio')?13:11);
-    b.setAttribute('aria-pressed',String(on));
     const track=allDays.find(day=>day.id===b.dataset.sound)?.track;
+    if(spotifyLinks(track) || track?.kind==='link') {
+      b.setAttribute('aria-haspopup','dialog'); b.removeAttribute('aria-pressed');
+    } else {
+      b.setAttribute('aria-pressed',String(on)); b.removeAttribute('aria-haspopup');
+    }
     b.setAttribute('aria-label',(on?'Пауза':'Послушать')+' '+(track?.title||''));
   });
-  const hero=main.querySelector('[data-frame]');
-  if(hero)hero.classList.toggle('is-playing',hero.dataset.frame===id);
-  main.querySelectorAll('[data-card]').forEach(el=>el.classList.toggle('is-playing',el.dataset.card===id));
 }
 main.addEventListener('click',async event=>{
   if(!main.classList.contains('archive-page'))return;
@@ -141,6 +145,8 @@ main.addEventListener('click',async event=>{
   if(b.dataset.sound){
     const day=allDays.find(d=>d.id===b.dataset.sound);if(!day)return;
     if(playingDay()===day.id){stopTrack();refreshSound();return}
+    const spotify=spotifyLinks(day.track);
+    if(spotify){showSpotifyPlayer(day.track,spotify);return}
     if(day.track.kind==='link'){modal('Песня дня','<p class="dialog-lead">'+esc(day.track.title)+'</p><a class="button primary" target="_blank" rel="noopener noreferrer" href="'+esc(day.track.url)+'">'+icon('external-link',16)+'Открыть песню</a>');return}
     try{await playTrack(day,refreshSound);refreshSound()}catch(err){toast(err.message);refreshSound()}
   }

@@ -1,5 +1,4 @@
 import { icon } from './ui.js';
-import { photoPatina } from './patina.js';
 
 const visibleLimit = 5;
 const number = value => String(value).padStart(2, '0');
@@ -12,7 +11,7 @@ function photoName(photo, index) {
 
 function getItems(day, days) {
   const photos = (day.photos || []).map((photo, index) => ({
-    src: photo.src, title: photoName(photo, index), date: day.date, photoIndex: index,
+    src: photo.src, title: photoName(photo, index), photoIndex: index,
   })).filter(item => item.src);
   if (photos.length !== 1) return { items: photos, isDays: false };
   const permitted = new Map();
@@ -24,12 +23,12 @@ function getItems(day, days) {
   const items = [...permitted.values()]
     .sort((a, b) => String(b.date).localeCompare(String(a.date)))
     .map(memory => ({
-      src: memory.photos[0].src, title: memory.title, date: memory.date, memory,
+      src: memory.photos[0].src, title: memory.title, memory,
     }));
   return { items, isDays: true };
 }
 
-export function mountDeck(host, { day, days = [], readOnly = false, onPickPhoto, onPickDay, startIndex = 0, extraDays = 0 }) {
+export function mountDeck(host, { day, days = [], readOnly = false, onPickPhoto, onPickDay, startIndex = 0 }) {
   const { items, isDays } = getItems(day, days);
   const end = items.length - 1;
   let selected = isDays ? items.findIndex(item => item.memory.id === day.id) : items.findIndex(item => item.photoIndex === startIndex);
@@ -79,8 +78,7 @@ export function mountDeck(host, { day, days = [], readOnly = false, onPickPhoto,
         button = document.createElement('button');
         button.type = 'button'; button.className = 'deck-thumb'; button.dataset.index = index;
         const img = document.createElement('img');
-        img.className = 'patina-photo'; img.alt = ''; img.draggable = false; img.decoding = 'async'; img.src = item.src;
-        img.style.setProperty('--fade', photoPatina(item.date, extraDays));
+        img.alt = ''; img.draggable = false; img.decoding = 'async'; img.src = item.src;
         button.append(img);
         const after = [...fan.children].find(child => Number(child.dataset.index) > index);
         fan.insertBefore(button, after || null);

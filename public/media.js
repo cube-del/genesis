@@ -2,6 +2,25 @@ let context, analyser, master, streamOutput, spectrum;
 let active = null;
 let duck = false;
 
+export function spotifyLinks(track) {
+  if (!track) return null;
+  let id = '';
+  if (['spotify-catalog','spotify-api'].includes(track.source) && /^[A-Za-z0-9]{22}$/.test(track.id)) id = track.id;
+  if (!id && track.url) {
+    try {
+      const url = new URL(track.url);
+      if (url.origin === 'https://open.spotify.com' && !url.username && !url.password) {
+        id = /^\/(?:intl-[a-z-]+\/)?(?:embed\/)?track\/([a-zA-Z0-9]{22})\/?$/i.exec(url.pathname)?.[1];
+      }
+    } catch { return null; }
+  }
+  return id ? {
+    url:'https://open.spotify.com/track/' + id,
+    embed:'https://open.spotify.com/embed/track/' + id,
+    automatic:track.kind==='preview' || ['spotify-catalog','spotify-api'].includes(track.source)
+  } : null;
+}
+
 function audioGraph() {
   if (context) return context;
   const Context = window.AudioContext || window.webkitAudioContext;
@@ -119,6 +138,7 @@ function ambient(day, state) {
 export async function playTrack(day, onEnd) {
   stopTrack();
   const track = day.track;
+  if (spotifyLinks(track)) throw new Error('Послушайте трек в плеере Spotify.');
   if (!track || track.kind === 'link' || (track.kind !== 'ambient' && !track.src)) {
     throw new Error('У этой песни нет доступного фрагмента. Её можно открыть по ссылке.');
   }

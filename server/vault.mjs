@@ -2,8 +2,10 @@ import path from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { makeZip } from './zip.mjs';
+import { spotifyTrackId } from './music.mjs';
 import { portablePage } from './portable.mjs';
 import { synthesizeVoice } from './voice.mjs';
+import { coverTextLimit, normalizeCoverText } from './cover-text.mjs';
 
 export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -54,7 +56,7 @@ function unpackDataUrl(src, allowed, maxBytes) {
   if (!data.length || data.length > maxBytes) invalid('Не удалось прочитать вложение.');
   return { data, ext };
 }
-function imageFormat(bytes) {
+export function imageFormat(bytes) {
   if (bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return 'jpg';
   if (bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) return 'png';
   if (bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') return 'webp';
@@ -81,10 +83,14 @@ function cleanDay(input) {
   if (!moods.has(mood)) invalid('Неизвестное настроение.');
   if (!Array.isArray(palette) || palette.length < 1 || palette.length > 8 || palette.some(color => !/^#[0-9A-Fa-f]{6}$/.test(color))) invalid('Палитра повреждена.');
   if (!Array.isArray(photos) || photos.length < 1 || photos.length > 5) invalid('Добавьте от одной до пяти фотографий.');
+  const coverText = normalizeCoverText(input.coverText);
+  if (input.coverText !== undefined && !coverText) invalid('Для обложки нужна короткая фраза до ' + coverTextLimit + ' символов.');
   return {
     date, title: stringValue(title, 160, 'Название'), text: stringValue(text, 50000, 'Текст'),
     quote: stringValue(quote, 1000, 'Цитата'), mood, weather: stringValue(weather, 120, 'Погода'),
+    ...(coverText ? { coverText } : {}),
     ...(weatherTypes.has(input.weatherType) ? { weatherType: input.weatherType } : {}),
+    ...(['gemini', 'local-model'].includes(input.analysisSource) ? { analysisSource: input.analysisSource } : {}),
     palette, warmth: score(warmth, 'теплота'), energy: score(energy, 'энергия'),
     explanation: Array.isArray(explanation) ? explanation.slice(0, 12).map(item => stringValue(item, 1600, 'Объяснение')) : [],
     voice: Boolean(voice), favorite: Boolean(favorite)
@@ -104,6 +110,13 @@ function cleanTrack(input) {
   if (input.url) track.url = httpUrl(input.url);
   if (input.kind === 'preview') track.src = httpUrl(input.src);
   if (input.kind === 'link' && !track.url) invalid('Укажите ссылку на трек.');
+  const id = spotifyTrackId(track.url);
+  if (id) track.id = id;
+  if (['spotify-api', 'spotify-catalog'].includes(input.source)) {
+    if (!id || !['preview', 'link'].includes(track.kind)) invalid('Для трека Spotify нужна ссылка на запись в Spotify.');
+    track.source = input.source;
+    track.url = 'https://open.spotify.com/track/' + id;
+  }
   return track;
 }
 
@@ -121,11 +134,18 @@ export async function openVault(vaultDir, publicDir) {
     const folder = path.join(vaultDir, dir.name);
     const day = JSON.parse(await readFile(path.join(folder, 'memory.json'), 'utf8'));
     if (!validId(day.id) || days.has(day.id)) throw new Error('Некорректный идентификатор в ' + dir.name);
+    let passportChanged = false;
+    const spotifyId = spotifyTrackId(day.track?.url);
+    if (spotifyId && day.track.id !== spotifyId) {
+      day.track.id = spotifyId;
+      passportChanged = true;
+    }
     if (day.voice && !day.voiceSrc && !day.voiceFallback) {
       if (await synthesizeVoice(folder, day)) day.voiceSrc = 'voiceover.wav';
       else day.voiceFallback = true;
-      await atomicWrite(path.join(folder, 'memory.json'), pretty(day));
+      passportChanged = true;
     }
+    if (passportChanged) await atomicWrite(path.join(folder, 'memory.json'), pretty(day));
     // The passport is canonical. Recover a missing or stale derived postcard on restart.
     const portable = await portablePage(day);
     const postcard = path.join(folder, 'memory.html');

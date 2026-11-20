@@ -44,6 +44,26 @@
 }
 .compose-drop:hover, .compose-drop.is-over { background: #eaf0e2; border-color: #698367; }
 .compose-drop[aria-busy=true] { opacity: .65; }
+.compose-imports { display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px }
+.compose-imports button { display:flex;align-items:center;justify-content:center;gap:8px;min-height:40px;border:1px solid var(--c-line);border-radius:8px;background:#fffefa;color:var(--c-ink);font-size:13px;font-weight:650 }
+.compose-imports button:hover:enabled { border-color:#83967e;background:#f1f4ed }
+.compose-imports button:disabled,.compose-drop:disabled { opacity:.55 }
+.photo-import-actions,.folder-actions,.folder-pages { display:flex;align-items:center;gap:8px;flex-wrap:wrap }
+.photo-import-actions { margin-top:20px }
+.photo-import-setup { margin-top:18px;font-size:13px;color:#596252;line-height:1.55 }
+.photo-import-setup summary { cursor:pointer }
+.photo-import-setup p { margin:8px 0 0;overflow-wrap:anywhere }
+.photo-import-setup a { text-decoration:underline }
+.photo-import-actions [hidden],.folder-pages[hidden] { display:none }
+.folder-photos { display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:8px;max-height:52dvh;overflow-y:auto;margin:16px 0;padding:3px }
+.folder-photos label { min-width:0;position:relative;display:grid;gap:5px;align-content:start;cursor:pointer;border:2px solid transparent;border-radius:8px;padding:4px;background:#eeeee7 }
+.folder-photos label:has(:checked) { border-color:#557749;background:#e3ecdc }
+.folder-photos label:focus-within { outline:2px solid #375c42 }
+.folder-photos input { position:absolute;top:7px;left:7px;accent-color:#46673e }
+.folder-photos img { width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:3px }
+.folder-photos span { font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
+.folder-actions { justify-content:space-between }
+.folder-actions [data-add] { margin-left:auto }
 .compose-drop strong { font-size: 14px; font-weight: 750; }
 .compose-drop > span:not(.compose-upload-icon), .compose-drop small { color: var(--c-muted); font-size: 12px; }
 .compose-drop small { margin-top: 2px; font-size: 10px; }

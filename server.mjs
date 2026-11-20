@@ -31,11 +31,10 @@ function json(res, value, status = 200) {
   res.writeHead(status, { 'Content-Type': mime['.json'], 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(value));
 }
-async function readBody(req) {
+async function readBody(req, limit = 116 * 1024 * 1024) {
   if (req.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json') {
     throw new HttpError(415, 'Требуется тело запроса JSON.');
   }
-  const limit = 116 * 1024 * 1024;
   if (Number(req.headers['content-length']) > limit) throw new HttpError(413, 'Слишком большой объём вложений.');
   const chunks = [];
   let size = 0;
@@ -94,6 +93,7 @@ export async function createDaytraceServer(options = {}) {
   const shareOrigin = knownOrigin ? new URL(knownOrigin).origin : null;
   if (shareOrigin && !/^https?:\/\//.test(shareOrigin)) throw new Error('DAYTRACE_PUBLIC_URL должен начинаться с https:// или http://');
   const ownerKey = randomBytes(32).toString('hex');
+  const analysisSource = process.env.GEMINI_API_KEY?.trim() ? 'gemini' : 'local-model';
   return http.createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
@@ -125,6 +125,21 @@ export async function createDaytraceServer(options = {}) {
       }
       if (route.startsWith('/api/')) {
         owner(read && (route === '/api/days' || dayRoute.test(route)));
+        if (route.startsWith('/api/google-photos/')) {
+          const clientId = (options.googlePhotosClientId ?? process.env.GOOGLE_PHOTOS_CLIENT_ID ?? '').trim();
+          if (route === '/api/google-photos/config' && method === 'GET') return json(res, { clientId });
+          const match = route.match(/^\/api\/google-photos\/sessions(?:\/([\w-][\w.~=-]{0,1023})(\/photos)?)?$/);
+          if (!match || !(match[1] ? method === 'GET' || (method === 'DELETE' && !match[2]) : method === 'POST')) missing();
+          if (!clientId) throw new HttpError(409, 'Для подключения укажите GOOGLE_PHOTOS_CLIENT_ID в настройках DayTrace.');
+          const limit = !match[1] ? (await readBody(req, 1024)).limit : undefined;
+          const ctrl = new AbortController();
+          res.once('close', () => ctrl.abort());
+          const { googlePhotos } = await import('./server/google-photos.mjs');
+          const value = await googlePhotos({ method, session: match[1], photos: match[2], limit,
+            authorization: req.headers.authorization, signal: ctrl.signal, request: options.googlePhotosFetch });
+          if (!res.destroyed) return json(res, value);
+          return;
+        }
         if (route === '/api/days') {
           if (method === 'GET') return json(res, vault.list());
           if (method === 'POST') return json(res, await vault.create(await readBody(req)), 201);
@@ -132,6 +147,30 @@ export async function createDaytraceServer(options = {}) {
         if (route === '/api/music' && method === 'GET') {
           const { resolveTrack } = await import('./server/music.mjs');
           return json(res, await resolveTrack(url));
+        }
+        if (route === '/api/atmosphere/status' && method === 'GET') {
+          const ready = analysisSource === 'gemini' || Boolean(options.atmosphereAnalyzer) ||
+            await (await import('./server/local-atmosphere.mjs')).localAtmosphereReady();
+          return json(res, { analysisSource, ready });
+        }
+        if (route === '/api/atmosphere' && method === 'POST') {
+          const input = await readBody(req, 14 * 1024 * 1024);
+          if (input.expectedProvider && input.expectedProvider !== analysisSource) {
+            throw new HttpError(409, 'Настройки анализа изменились. Обновите страницу перед отправкой.');
+          }
+          const ctrl = new AbortController();
+          const cancel = () => ctrl.abort();
+          res.once('close', cancel);
+          try {
+            const analyze = options.atmosphereAnalyzer || (analysisSource === 'gemini'
+              ? (await import('./server/atmosphere.mjs')).analyzeAtmosphere
+              : (await import('./server/local-atmosphere.mjs')).analyzeLocalAtmosphere);
+            const result = await analyze(input, { signal: ctrl.signal });
+            if (!res.destroyed) return json(res, { ...result, analysisSource });
+            return;
+          } finally {
+            res.off('close', cancel);
+          }
         }
         const day = route.match(dayRoute);
         if (day) {
@@ -156,7 +195,11 @@ export async function createDaytraceServer(options = {}) {
       }
       if (!read) throw new HttpError(405, 'Метод не поддерживается.');
       if (spaRoute.test(route)) {
-        if (!route.startsWith('/share/')) owner(true);
+        if (!route.startsWith('/share/')) {
+          owner(true);
+          res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+          if (options.googlePhotosClientId || process.env.GOOGLE_PHOTOS_CLIENT_ID) res.setHeader('Referrer-Policy', 'origin');
+        }
         return await serveFile(req, res, path.join(publicDir, 'index.html'));
       }
       // Never expose the vault or the server's repository through the static route.
@@ -172,8 +215,8 @@ export async function createDaytraceServer(options = {}) {
       if (res.destroyed) return;
       if (res.headersSent) return res.destroy();
       const status = error.status || (error instanceof URIError ? 400 : 500);
-      if (status >= 500) console.error(error);
-      json(res, { error: status >= 500 ? 'Не удалось завершить операцию. Попробуйте ещё раз.' : error.message }, status);
+      if (status >= 500 && !error.expose) console.error(error);
+      json(res, { error: status >= 500 && !error.expose ? 'Не удалось завершить операцию. Попробуйте ещё раз.' : error.message }, status);
     }
   });
 }
