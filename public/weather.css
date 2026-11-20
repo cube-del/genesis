@@ -1,0 +1,62 @@
+.dt-day-weather {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: 54vw;
+  height: 100vh;
+  height: 100dvh;
+  z-index: 3;
+  contain: strict;
+  isolation: isolate;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  opacity: 0;
+  mask-image: linear-gradient(90deg, #000 0%, #000 48%, #000c 70%, transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 48%, #000c 70%, transparent 100%);
+}
+
+.dt-day-weather::before,
+.dt-day-weather canvas {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.dt-day-weather[data-sky="mist"]::before {
+  background:
+    radial-gradient(ellipse at -10% 52%, #b7c8cc61, #bdc9c928 52%, transparent 81%),
+    linear-gradient(115deg, #93a9aa33, transparent 62%);
+}
+
+.dt-day-weather[data-sky="warm_haze"]::before {
+  background:
+    radial-gradient(ellipse at -7% 19%, #f5b28078, #eed5a846 42%, transparent 77%),
+    radial-gradient(ellipse at 6% 80%, #caa98b3d, transparent 72%);
+}
+
+.dt-day-weather[data-sky="rain_glass"]::before {
+  background: linear-gradient(124deg, #76949c4d, #a6b5b82b 40%, transparent 82%);
+}
+
+.dt-day-weather[data-sky="wind_sparks"]::before {
+  background: radial-gradient(ellipse at -20% 72%, #b3b5a65c, #c8c4b533 46%, transparent 82%);
+}
+
+.dt-day-weather[data-sky="clear_light"]::before {
+  background:
+    conic-gradient(from 0deg at -9% -5%, transparent 118deg, #fff0be60 121deg, transparent 126deg,
+      transparent 139deg, #ffeab85c 143deg, #fff9df61 146deg, transparent 149deg,
+      transparent 154deg, #fbdfa351 157deg, transparent 161deg),
+    radial-gradient(ellipse at 0% 0%, #fff0c67d, transparent 57%);
+}
+
+@media (max-width: 650px) {
+  .dt-day-weather { width: 53vw; }
+}
+
+@media print, (forced-colors: active) {
+  .dt-day-weather { display: none; }
+}
