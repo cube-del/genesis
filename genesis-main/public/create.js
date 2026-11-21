@@ -1,6 +1,7 @@
-import { api, esc, icon, navigate, toast } from './ui.js';
+import { imageFocus, frameComposition } from './composition.js';
+import { api, esc, icon, navigate, toast, modal, closeModal } from './ui.js';
 import { analyzeDay, fileData, localTrack, pickTrack } from './analysis.js';
-import { minManualBpm, maxManualBpm } from './rhythm.js';
+import { minManualBpm, maxManualBpm, tappedTempo, deezerTrackId } from './rhythm.js';
 import { chooseGooglePhotos } from './google-photos.js';
 import { chooseFolderPhotos, imageTypes, maxPhotoBytes } from './photo-folder.js';
 
@@ -20,7 +21,7 @@ const nextFrame = () => new Promise(resolve => requestAnimationFrame(() => reque
 export async function renderCreate(root) {
   cleanupCreate();
   let active = true, reading = false, sending = false, trackFile = null, dragLevel = 0;
-  let photos = [];
+  let photos = [], taps = [], tempoSource = 'manual';
   const ctrl = new AbortController();
   dispose = () => { active = false; ctrl.abort(); };
   const now = todayLocal();
@@ -38,7 +39,7 @@ export async function renderCreate(root) {
     '<p id="c-auto-note" class="compose-note">Подберём трек из Spotify по настроению и ритму вашего дня.</p>' +
     '<div id="c-manual" hidden><div class="compose-source"><label><input type="radio" name="source" value="file" checked> Аудиофайл</label><label><input type="radio" name="source" value="link"> Ссылка</label></div>' +
     '<label class="compose-audio-pick" id="c-audio-label"><input type="file" class="compose-sr" id="c-audio" accept="audio/*,.mp3,.m4a,.wav,.ogg,.flac"><span>' + symbol('upload', 17) + ' <span id="c-audio-name">Выберите аудио до 24 МБ</span></span></label>' +
-    '<label id="c-link-label" class="compose-link" hidden><span>Ссылка на песню</span><input type="url" id="c-url" placeholder="https://…"><small>Песня откроется в музыкальном сервисе.</small></label><label id="c-bpm-label" class="compose-link" hidden><span>Темп песни, BPM</span><input type="number" id="c-bpm" min="' + minManualBpm + '" max="' + maxManualBpm + '" step="1" placeholder="Например, 96"><small>Необязательно. Темп задаёт скорость смены фото. Без значения кадры сменяются раз в 8 секунд.</small></label></div><p class="compose-error" id="c-audio-error" role="alert"></p></div>' +
+    '<label id="c-link-label" class="compose-link" hidden><span>Ссылка на песню</span><input type="url" id="c-url" placeholder="https://…"><small>Песня откроется в музыкальном сервисе.</small></label><label id="c-bpm-label" class="compose-link" hidden><span>Темп песни, BPM</span><input type="number" id="c-bpm" min="' + minManualBpm + '" max="' + maxManualBpm + '" step="1" placeholder="Например, 96"><small>Оставьте поле пустым для автоматического определения или задайте свой ритм.</small></label><button class="compose-tap" type="button" id="c-tap">Настучать ритм</button><small id="c-tempo-note" class="compose-note" role="status"></small></div><p class="compose-error" id="c-audio-error" role="alert"></p></div>' +
     '<label class="compose-voice"><span class="compose-voice-icon">' + symbol('mic', 20) + '</span><span><strong>Озвучить запись</strong><small>Прочитать рассказ голосом устройства</small></span><input type="checkbox" id="c-voice" checked><span class="compose-switch" aria-hidden="true"></span></label>' +
     '</fieldset><p id="c-ai-note" class="compose-note" role="status">Проверяем настройки анализа…</p><p id="c-error" class="compose-error" role="alert"></p><div class="compose-progress" hidden id="c-progress" role="status" aria-live="polite"></div>' +
     '<button class="compose-submit" type="submit">Сохранить день ' + symbol('arrow', 19) + '</button></form>' +
@@ -77,6 +78,8 @@ export async function renderCreate(root) {
     el('empty').hidden = Boolean(photos.length);
     el('paper').classList.toggle('has-photo', Boolean(photos.length));
     if (photos.length) {
+      const layout = frameComposition(photos[0], '');
+      image.style.objectPosition = layout.x*100 + '% ' + layout.y*100 + '%';
       if (image.getAttribute('src') !== photos[0].src) image.src = photos[0].src;
     }
     else image.removeAttribute('src');
@@ -89,6 +92,7 @@ export async function renderCreate(root) {
   }
   function drawPhotos() {
     el('thumbs').innerHTML = photos.map((p, i) => '<div class="compose-thumb"><img src="' + esc(p.src) + '" alt="' + esc(p.name) + '">' +
+      '<button type="button" class="compose-focus" data-focus="' + i + '" aria-label="Центр кадра ' + (i+1) + '">Фокус</button>' +
       '<button type="button" class="compose-remove" data-remove="' + i + '" aria-label="Убрать фото ' + (i + 1) + '">' + symbol('trash', 12) + '</button>' +
       '<div><button type="button" data-from="' + i + '" data-to="' + (i - 1) + '" aria-label="Переместить фото ' + (i + 1) + ' раньше"' + (!i ? ' disabled' : '') + '>' + symbol('back', 12) + '</button>' +
       '<span>' + (i ? i + 1 : 'Обложка') + '</span><button type="button" data-from="' + i + '" data-to="' + (i + 1) + '" aria-label="Переместить фото ' + (i + 1) + ' позже"' + (i === photos.length - 1 ? ' disabled' : '') + '>' + symbol('arrow', 12) + '</button></div></div>').join('');
@@ -117,7 +121,7 @@ export async function renderCreate(root) {
       const results = await Promise.allSettled(files.map(async file => {
         const src = file instanceof File ? await fileData(file) : file.src;
         const img = new Image(); img.src = src; await img.decode();
-        return { name: file.name, src };
+        return { name: file.name, src, focus: imageFocus(img) };
       }));
       const added = results.filter(r => r.status === 'fulfilled').map(r => r.value);
       if (!added.length || (!batch && added.length !== files.length)) throw Error();
@@ -133,7 +137,9 @@ export async function renderCreate(root) {
     const manual = mode('trackMode') === 'manual', link = mode('source') === 'link';
     el('auto-note').hidden = manual; el('manual').hidden = !manual;
     el('audio-label').hidden = link; el('link-label').hidden = !link;
-    el('bpm-label').hidden = !link; el('bpm').disabled = !manual || !link;
+    el('bpm-label').hidden = !manual; el('bpm').disabled = !manual;
+    el('tempo-note').textContent = link ? 'Для прямой ссылки Deezer проверим темп в каталоге. Если темп неизвестен, смена кадра раз в 8 с.'
+      : 'Измерим пульс аудиофайла. При слабом или переменном ритме смена кадра раз в 8 с.';
     el('url').required = manual && link; el('url').disabled = !manual || !link;
     error('audio-error');
   }
@@ -158,14 +164,56 @@ export async function renderCreate(root) {
   listen(el('thumbs'), 'click', e => {
     const button = e.target.closest('button');
     if (!button) return;
-    const { remove, from, to } = button.dataset;
+    const { remove, from, to, focus } = button.dataset;
+    if (focus !== undefined) {
+      const photo = photos[Number(focus)];
+      modal('Центр кадра', '<p>Нажмите на важную деталь или передвиньте метку стрелками.</p><button class="focus-picker" aria-label="Выбрать центр кадра"><img alt="' + esc(photo.name) + '" src="' + esc(photo.src) + '"><i></i></button><button class="button primary" data-apply-focus>Применить</button>');
+      const picker = document.querySelector('.focus-picker'), marker = picker.querySelector('i');
+      const point = { ...photo.focus, manual: true };
+      function place(x, y) {
+        point.x = Math.max(0, Math.min(1, x)); point.y = Math.max(0, Math.min(1, y));
+        marker.style.left = point.x * 100 + '%'; marker.style.top = point.y * 100 + '%';
+        picker.setAttribute('aria-label', 'Центр кадра, по горизонтали ' + Math.round(point.x*100) + '%, по вертикали ' + Math.round(point.y*100) + '%');
+      }
+      place(point.x, point.y);
+      picker.onclick = event => {
+        if (!event.detail) return;
+        const rect = picker.getBoundingClientRect();
+        place((event.clientX-rect.left)/rect.width, (event.clientY-rect.top)/rect.height);
+      };
+      picker.onkeydown = event => {
+        const delta = { ArrowLeft:[-.04,0], ArrowRight:[.04,0], ArrowUp:[0,-.04], ArrowDown:[0,.04] }[event.key];
+        if (delta) { event.preventDefault(); place(point.x+delta[0], point.y+delta[1]); }
+      };
+      document.querySelector('[data-apply-focus]').onclick = () => {
+        photos[Number(focus)] = { ...photo, focus: point }; closeModal(); drawPhotos();
+      };
+      return;
+    }
     if (remove !== undefined) photos.splice(Number(remove), 1);
     if (from !== undefined && Number(to) >= 0 && Number(to) < photos.length) [photos[from], photos[to]] = [photos[to], photos[from]];
     drawPhotos(); updateImportButtons(); error('photo-error');
   });
-  for (const choice of form.querySelectorAll('input[type="radio"]')) listen(choice, 'change', showMusicFields);
+  function resetTempo() {
+    taps = []; tempoSource = 'manual'; el('bpm').value = ''; showMusicFields();
+  }
+  for (const choice of form.querySelectorAll('input[type="radio"]')) listen(choice, 'change', resetTempo);
+  listen(el('url'), 'input', resetTempo);
+  listen(el('bpm'), 'input', () => { taps = []; tempoSource = 'manual'; showMusicFields(); });
+  listen(el('tap'), 'click', () => {
+    const now = performance.now();
+    if (now - taps.at(-1) > 1800) taps = [];
+    taps = [...taps.slice(-7), now];
+    const value = tappedTempo(taps);
+    if (value) {
+      el('bpm').value = value; tempoSource = 'tap';
+      el('tempo-note').textContent = 'По вашим ударам · ' + value + ' BPM';
+    } else {
+      el('tempo-note').textContent = taps.length < 4 ? 'Нажмите в такт ещё ' + (4 - taps.length) + ' раз.' : 'Допустимый темп от 40 до 240 BPM.';
+    }
+  });
   listen(el('audio'), 'change', e => {
-    trackFile = e.target.files[0] || null;
+    resetTempo(); trackFile = e.target.files[0] || null;
     error('audio-error');
     if (trackFile && (!audioTypes.has(trackFile.type) || trackFile.size > maxAudioBytes || !trackFile.size)) {
       error('audio-error', 'Выберите MP3, WAV, M4A, OGG, FLAC или другое поддерживаемое аудио до 24 МБ.');
@@ -217,10 +265,14 @@ export async function renderCreate(root) {
       let track;
       if (!manual) track = await pickTrack({ ...signals, date, recentTracks: Array.isArray(prior) ? prior.slice(0, 8).map(d => d.track).filter(Boolean) : [] }, null, ctrl.signal);
       else if (link) {
-        const bpm = el('bpm').valueAsNumber || null;
-        track = { kind: 'link', url: url.href, title: 'Песня с ' + url.hostname.replace(/^www\./, ''), artist: 'Ваша ссылка', bpm, ...(bpm ? { bpmSource: 'manual' } : {}) };
-      }
-      else track = await localTrack(trackFile);
+        track = { kind: 'link', url: url.href, title: 'Песня с ' + url.hostname.replace(/^www\./, ''), artist: 'Ваша ссылка', bpm: null };
+        const id = deezerTrackId(url);
+        if (id && !el('bpm').value) {
+          const meta = await api('/api/music/deezer/' + id, { signal: ctrl.signal }).catch(() => null);
+          if (meta?.bpm) Object.assign(track, meta, { bpmSource: 'deezer' });
+        }
+      } else track = await localTrack(trackFile);
+      if (manual && el('bpm').value) Object.assign(track, { bpm: el('bpm').valueAsNumber, bpmSource: tempoSource });
       if (!active) return;
       track.title = track.title.slice(0, 200); track.artist = track.artist.slice(0, 200);
       progress(3); await nextFrame();

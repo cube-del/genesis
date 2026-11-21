@@ -29,3 +29,27 @@ test('measured pulse keeps the fast tempo and silence uses the same fallback as 
   assert.equal(photoInterval(link), 5000);
   assert.match(tempoLabel(link), /Задано вручную.*96 BPM/u);
 });
+
+test('переменный пульс даёт запасной интервал, ручной темп имеет собственную подпись', async () => {
+  const slow=pulses(72), fast=pulses(144), samples = new Float32Array(slow.length+fast.length);
+  samples.set(slow.getChannelData(0)); samples.set(fast.getChannelData(0),slow.length);
+  const track = audioSignals({...slow, length:samples.length, getChannelData:()=>samples});
+  assert.equal(track.bpm,null);
+  assert.equal(photoInterval(track),8000);
+  const { tappedTempo, deezerTrackId } = await import('../public/rhythm.js');
+  assert.equal(tappedTempo([0,500,1000]),null);
+  assert.equal(tappedTempo([0,500,990,1500]),120);
+  assert.match(tempoLabel({kind:'file',bpm:120,bpmSource:'tap'}),/вашим ударам/);
+  assert.match(tempoLabel({kind:'link',bpm:104.4,bpmSource:'deezer'}),/Deezer.*104,4/);
+  assert.equal(deezerTrackId(new URL('https://www.deezer.com/us/track/1109737')), '1109737');
+  assert.equal(deezerTrackId(new URL('https://example.com/track/1109737')), null);
+});
+
+test('длинная запись с тихим вступлением измеряется по последующим фрагментам', () => {
+  const phrase = pulses(96), length = 9 * phrase.length, samples = new Float32Array(length);
+  for (let i=3; i<9; i++) samples.set(phrase.getChannelData(0), i*phrase.length);
+  assert.equal(audioSignals({...phrase, length, getChannelData:()=>samples}).bpm,96);
+  const changed = pulses(144).getChannelData(0);
+  for (let i=6; i<9; i++) samples.set(changed, i*phrase.length);
+  assert.equal(audioSignals({...phrase, length, getChannelData:()=>samples}).bpm,null);
+});

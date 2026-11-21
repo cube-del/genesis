@@ -116,3 +116,15 @@ test('Spotify Retry-After останавливает повторные обра
   await resolve(search);
   assert.equal(log.length,3);
 });
+
+test('темп Deezer принимается только для совпавшего трека с известным BPM', async () => {
+  const { deezerTempo } = await import('../server/music.mjs');
+  for (const [id,bpm,expected] of [[123,104.4,104.4],[124,104.4,null],[123,0,null]]) {
+    const result = await deezerTempo('123', async url => {
+      assert.equal(url, 'https://api.deezer.com/track/123');
+      return Response.json({ id,bpm });
+    });
+    assert.equal(result.bpm,expected);
+  }
+  assert.deepEqual(await deezerTempo('123', () => { throw Error('offline'); }), {bpm:null});
+});

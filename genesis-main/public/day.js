@@ -1,3 +1,4 @@
+import { frameComposition } from './composition.js';
 import { api, dateLabel, esc, icon, modal, moods, navigate, shareDialog, toast } from './ui.js';
 import { audioLevel, elapsedSeconds, playingDay, playTrack, progress, recordingAudio, setDucking, spotifyLinks, stopTrack } from './media.js';
 import { mountSpotifyPlayer } from './spotify.js';
@@ -118,7 +119,7 @@ function shaderSurface() {
       const ratio = (w/h)/(img.naturalWidth/img.naturalHeight);
       const x = Math.min(1,ratio)/camera.zoom, y = Math.min(1,1/ratio)/camera.zoom;
       gl.uniform2f(loc.crop,x,y);
-      gl.uniform2f(loc.offset,clamp(camera.x*x,(x-1)/2,(1-x)/2),clamp(camera.y*y,(y-1)/2,(1-y)/2));
+      gl.uniform2f(loc.offset,clamp(((camera.anchorX ?? .5)-.5)*(1-x)+camera.x*x,(x-1)/2,(1-x)/2),clamp(((camera.anchorY ?? .5)-.5)*(1-y)+camera.y*y,(y-1)/2,(1-y)/2));
       const c = cssColor(day.palette?.[0]); gl.uniform3f(loc.tint,parseInt(c.slice(1,3),16)/255,parseInt(c.slice(3,5),16)/255,parseInt(c.slice(5,7),16)/255);
       gl.uniform1f(loc.art,lookFor(day).index); gl.uniform1f(loc.weather,weatherIndex(day)); gl.uniform1f(loc.t,time%400); gl.uniform1f(loc.loud,level);
       gl.drawArrays(gl.TRIANGLE_STRIP,0,4); return surface;
@@ -195,11 +196,15 @@ function scene(canvas, day, {onPhoto, onProgress, reducedMotion}) {
   const colors=day.palette || []; const ink = cssColor(colors[0]);
   const shade = ctx.createLinearGradient(0,H*.32,0,H); shade.addColorStop(0,'rgba(0,0,0,0)'); shade.addColorStop(.42,'rgba(0,0,0,.15)'); shade.addColorStop(1,'rgba(0,0,0,.76)');
   const topShade = ctx.createLinearGradient(0,0,0,H*.23); topShade.addColorStop(0,'rgba(0,0,0,.38)'); topShade.addColorStop(1,'rgba(0,0,0,0)');
+  const layouts = photos.map(photo => frameComposition(photo, day.mood));
+  const captionWidth = W * (photos.some(photo=>photo.focus) ? .80 : 1) - margin*2;
+  const upperShade = ctx.createLinearGradient(0,0,0,H*.69);
+  upperShade.addColorStop(0,'rgba(0,0,0,.62)'); upperShade.addColorStop(.5,'rgba(0,0,0,.42)'); upperShade.addColorStop(1,'transparent');
   const caption = day.coverText || String(day.quote || day.title).slice(0,260).trim();
   const isSans=day.mood==='energy'; let fontSize=isSans?62:68, captionLines, captionFont;
   do {
     captionFont=`${isSans?'600':'italic'} ${fontSize}px ${isSans?'Arial, sans-serif':'Georgia, serif'}`;
-    ctx.font=captionFont;captionLines=linesFor(ctx,caption,W-margin*2);
+    ctx.font=captionFont;captionLines=linesFor(ctx,caption,captionWidth);
     if(captionLines.length<=5 || fontSize<=38)break;
     fontSize-=4;
   } while(true);
@@ -208,6 +213,7 @@ function scene(canvas, day, {onPhoto, onProgress, reducedMotion}) {
     const {image,index,started} = shot;
     const pace = withSequence ? 1 : 8000 / shotLength();
     const camera = cameraAt((time-started)/1000*pace,index,energy,sound);
+    camera.anchorX=layouts[index].x; camera.anchorY=layouts[index].y;
     const seconds = time/1000;
     let art;
     try { art = shader?.draw(image,W,H,seconds,sound,day,camera); }
@@ -216,8 +222,8 @@ function scene(canvas, day, {onPhoto, onProgress, reducedMotion}) {
 
     const scale = Math.max(W/image.naturalWidth,H/image.naturalHeight)*camera.zoom;
     const width = image.naturalWidth*scale, height = image.naturalHeight*scale;
-    const x = clamp((W-width)/2-camera.x*W,W-width,0);
-    const y = clamp((H-height)/2-camera.y*H,H-height,0);
+    const x = clamp((W-width)*camera.anchorX-camera.x*W,W-width,0);
+    const y = clamp((H-height)*camera.anchorY-camera.y*H,H-height,0);
     ctx.save();
     ctx.filter=lookFor(day).filter;
     ctx.drawImage(image,x,y,width,height);
@@ -239,13 +245,17 @@ function scene(canvas, day, {onPhoto, onProgress, reducedMotion}) {
       ctx.fillStyle=ink;
       ctx.fillRect(0,0,W,H);
     }
-    ctx.fillStyle=shade; ctx.fillRect(0,0,W,H); ctx.fillStyle=topShade; ctx.fillRect(0,0,W,H);
+    const layout = layouts[current?.index || 0];
+    ctx.fillStyle=layout.top ? upperShade : shade; ctx.fillRect(0,0,W,H); ctx.fillStyle=topShade; ctx.fillRect(0,0,W,H);
     ctx.drawImage(ornament, 0, 0);
     ctx.fillStyle='#fffaf4'; ctx.textBaseline='alphabetic'; ctx.textAlign='left';
     ctx.font='600 28px Arial, sans-serif'; ctx.fillText('DayTrace',margin,78);
     ctx.font='22px Arial, sans-serif'; ctx.fillText(shortDate,margin,112);
     ctx.font=captionFont;
-    captionLines.forEach((line,i,array)=>ctx.fillText(line,margin,captionBottom-(array.length-i-1)*lineHeight,W-margin*2));
+    ctx.textAlign=layout.align;
+    const textX = layout.align==='right' ? W-margin : layout.align==='center' ? W/2 : margin;
+    captionLines.forEach((line,i,array)=>ctx.fillText(line,textX,layout.top ? 205+i*lineHeight : captionBottom-(array.length-i-1)*lineHeight,captionWidth));
+    ctx.textAlign='left';
     ctx.fillStyle='rgba(255,255,255,.54)'; ctx.fillRect(margin,H-91,W-margin*2,1);
     ctx.fillStyle='#fffcf7'; ctx.font='25px Arial, sans-serif'; ctx.fillText(weatherLabel(day),margin,H-48,W*.6);
     colors.slice(0,5).forEach((color,i,array)=>{ctx.beginPath();ctx.arc(W-margin-10-(array.length-i-1)*25,H-57,9,0,Math.PI*2);ctx.fillStyle=cssColor(color);ctx.fill();ctx.strokeStyle='rgba(255,255,255,.68)';ctx.lineWidth=1.4;ctx.stroke();});

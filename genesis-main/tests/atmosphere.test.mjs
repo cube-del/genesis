@@ -111,3 +111,22 @@ test('local rules use the actual quote, distinguish text tones and explain image
   assert.equal(brief.quote, '🎈');
   assert.equal(brief.title, 'Память дня в дневнике');
 });
+
+test('локальный анализ учитывает область отрицания и конкретную деталь заголовка', () => {
+  const analyze = text => analyzeRuleAtmosphere({ ...input, text });
+  for (const text of ['Это была не радостная встреча.', 'Радости не было.']) {
+    const day = analyze(text);
+    assert.notEqual(day.mood, 'joy');
+    assert.match(day.explanation[0], /отрицание/iu);
+  }
+  assert.equal(analyze('Было тревожно, но потом мы улыбались и смеялись.').mood, 'joy');
+  assert.equal(analyze('Мы не только улыбались, но и смеялись.').mood, 'joy');
+  assert.equal(analyze('Мы не спеша улыбались.').mood, 'joy');
+  assert.notEqual(analyze('Дождя не было. Мы пили чай.').weatherType, 'rain_glass');
+  const hospital = 'Мы шли домой. За окном больницы впервые за неделю зажгли свет.';
+  const day = analyze(hospital);
+  assert.match(day.title, /больниц/iu);
+  assert.match(day.title, /свет/iu);
+  assert.ok(day.title.split(/\s+/u).length <= 7);
+  assert.ok(hospital.includes(day.quote));
+});

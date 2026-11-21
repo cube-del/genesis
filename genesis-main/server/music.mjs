@@ -152,3 +152,15 @@ export function createMusicResolver({ fetchImpl = fetch, env = process.env, now 
 }
 
 export const resolveTrack = createMusicResolver();
+
+export async function deezerTempo(id, fetchImpl = fetch) {
+  if (!/^[1-9]\d{0,14}$/.test(id)) return { bpm: null };
+  try {
+    const reply = await fetchImpl('https://api.deezer.com/track/' + id, { redirect: 'error', signal: AbortSignal.timeout(3500) });
+    if (!reply.ok) return { bpm: null };
+    const song = await reply.json();
+    if (String(song.id) !== id || !Number.isFinite(song.bpm) || song.bpm < 40 || song.bpm > 240) return { bpm: null };
+    return { bpm: song.bpm, ...(song.title ? {title: String(song.title).slice(0, 200)} : {}),
+      ...(song.artist?.name ? {artist: String(song.artist.name).slice(0, 200)} : {}) };
+  } catch { return { bpm: null }; }
+}

@@ -39,16 +39,21 @@ function palette(day) {
   return '<span class="palette" aria-label="Палитра фотографий">'+day.palette.map(c=>'<i style="background:'+esc(c)+'"></i>').join('')+'</span>';
 }
 function dayUrl(id){return shared?basePath+'?day='+encodeURIComponent(id):'/day/'+encodeURIComponent(id)}
+function archivePosition(photo) {
+  const f = photo?.focus;
+  return f && Number.isFinite(f.x) && Number.isFinite(f.y)
+    ? ' style="object-position:' + (f.x * 100) + '% ' + (f.y * 100) + '%"' : '';
+}
 function heroMarkup() {
   const day=heroOrder[heroIndex];if(!day)return '';
   const coverText = day.coverText || '«' + day.quote.replace(/[.!?…]$/,'') + '»';
   const label=heroOrder.length>1?'<div class="reel-nav"><span aria-live="polite">'+num(heroIndex+1)+' <em>/</em> '+num(heroOrder.length)+'</span><button class="reel-button" data-hero-step="-1" aria-label="Предыдущее воспоминание">'+icon('chevron-left',19)+'</button><button class="reel-button" data-hero-step="1" aria-label="Следующее воспоминание">'+icon('chevron-right',19)+'</button></div>':'';
-  return '<article class="hero patina-card" '+ageAttributes(day)+' data-frame="'+esc(day.id)+'" aria-label="Воспоминание в фокусе"><img class="hero-photo" fetchpriority="high" src="'+esc(day.photos[0].src)+'" alt=""><div class="hero-shade"></div><div class="hero-grain" aria-hidden="true"></div><div class="focus-tag">'+icon('scan',14)+'В фокусе</div><div class="hero-details"><div class="hero-date">'+dateLabel(day.date)+'<b></b>'+icon(weatherIcon(day),15)+' '+esc(day.weather)+'</div><h2>'+esc(day.title)+'</h2><p class="hero-quote">'+esc(coverText)+'</p><div class="hero-actions"><a data-nav href="'+dayUrl(day.id)+'" class="button hero-open">Открыть день '+icon('arrow-up-right',16)+'</a><button type="button" class="hero-audio" data-sound="'+esc(day.id)+'" aria-label="Послушать '+esc(day.track.title)+'"><span class="audio-ring">'+icon('play',13)+'</span><span class="hero-track-name">'+esc(day.track.title)+'</span></button></div></div>'+label+'</article>';
+  return '<article class="hero patina-card" '+ageAttributes(day)+' data-frame="'+esc(day.id)+'" aria-label="Воспоминание в фокусе"><img class="hero-photo" fetchpriority="high"'+archivePosition(day.photos[0])+' src="'+esc(day.photos[0].src)+'" alt=""><div class="hero-shade"></div><div class="hero-grain" aria-hidden="true"></div><div class="focus-tag">'+icon('scan',14)+'В фокусе</div><div class="hero-details"><div class="hero-date">'+dateLabel(day.date)+'<b></b>'+icon(weatherIcon(day),15)+' '+esc(day.weather)+'</div><h2>'+esc(day.title)+'</h2><p class="hero-quote">'+esc(coverText)+'</p><div class="hero-actions"><a data-nav href="'+dayUrl(day.id)+'" class="button hero-open">Открыть день '+icon('arrow-up-right',16)+'</a><button type="button" class="hero-audio" data-sound="'+esc(day.id)+'" aria-label="Послушать '+esc(day.track.title)+'"><span class="audio-ring">'+icon('play',13)+'</span><span class="hero-track-name">'+esc(day.track.title)+'</span></button></div></div>'+label+'</article>';
 }
 function card(day){
   const state=moods[day.mood]||moods.calm;
   const musicLabel=spotifyLinks(day.track)?'Spotify':day.track.bpm?Math.round(day.track.bpm)+' BPM':'Аудио';
-  return '<article class="memory-tile patina-card" data-card="'+esc(day.id)+'" '+ageAttributes(day)+'><div class="tile-frame"><a class="image-link" data-nav href="'+dayUrl(day.id)+'" aria-label="Открыть '+esc(day.title)+'"><img loading="lazy" src="'+esc(day.photos[0].src)+'" alt="'+esc(day.title)+'"></a>'+
+  return '<article class="memory-tile patina-card" data-card="'+esc(day.id)+'" '+ageAttributes(day)+'><div class="tile-frame"><a class="image-link" data-nav href="'+dayUrl(day.id)+'" aria-label="Открыть '+esc(day.title)+'"><img loading="lazy"'+archivePosition(day.photos[0])+' src="'+esc(day.photos[0].src)+'" alt="'+esc(day.title)+'"></a>'+
   '<span class="weather-chip">'+icon(weatherIcon(day),14)+esc(day.weather)+'</span>'+
   (!shared?'<button class="save-day '+(day.favorite?'saved':'')+'" data-save="'+esc(day.id)+'" aria-pressed="'+!!day.favorite+'" aria-label="'+(day.favorite?'Убрать из избранного':'В избранное')+'">'+icon('bookmark',17)+'</button>':'')+
   '<span class="tile-palette">'+palette(day)+'</span></div><div class="tile-meta"><time datetime="'+day.date+'">'+dateLabel(day.date)+'</time><span style="--mood-color:'+state.color+'">'+esc(state.label)+'</span></div><h3><a data-nav href="'+dayUrl(day.id)+'">'+esc(day.title)+'</a></h3><div class="tile-audio"><button data-sound="'+esc(day.id)+'" aria-label="Послушать '+esc(day.track.title)+'"><span class="tile-play">'+icon('play',11)+'</span><span>'+esc(day.track.title)+'</span></button><span>'+icon('waveform',15)+' '+musicLabel+'</span></div></article>';

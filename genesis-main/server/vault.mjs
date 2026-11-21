@@ -102,8 +102,9 @@ function cleanTrack(input) {
     title: stringValue(input.title, 200, 'Трек'), artist: stringValue(input.artist, 200, 'Исполнитель'),
     bpm: input.bpm == null ? null : score(input.bpm, 'темп', 0, 360), kind: input.kind
   };
-  if (track.bpm > 0 && ((track.kind === 'file' && input.bpmSource === 'measured') ||
-      (track.kind === 'link' && input.bpmSource === 'manual'))) track.bpmSource = input.bpmSource;
+  if (track.kind === 'file' && ['weak', 'variable', 'ambiguous', 'steady'].includes(input.pulseStatus)) track.pulseStatus = input.pulseStatus;
+  const sources = track.kind === 'file' ? ['measured', 'manual', 'tap'] : track.kind === 'link' ? ['manual', 'tap', 'deezer'] : [];
+  if (track.bpm > 0 && sources.includes(input.bpmSource)) track.bpmSource = input.bpmSource;
   if (input.variant !== undefined) track.variant = score(input.variant, 'вариант', 0, 1000000);
   if (input.reason) track.reason = stringValue(input.reason, 1600, 'Выбор музыки');
   if (input.energy != null) track.energy = score(input.energy, 'энергия аудио');
@@ -211,7 +212,12 @@ export async function openVault(vaultDir, publicDir) {
         }
         const src = 'photos/' + String(index + 1).padStart(2, '0') + '.' + imageFormat(data);
         await writeFile(path.join(staging, src), data);
-        day.photos.push({ name, src });
+        let focus;
+        if (image.focus) {
+          focus = { x: score(image.focus.x, 'фокус'), y: score(image.focus.y, 'фокус'),
+            ratio: score(image.focus.ratio, 'пропорции фото', 1e-8, 1e8), manual: image.focus.manual === true };
+        }
+        day.photos.push({ name, src, ...(focus ? { focus } : {}) });
       }
       day.track = await saveTrack(input.track, staging);
       if (day.voice) {

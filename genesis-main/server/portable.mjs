@@ -1,3 +1,4 @@
+import { frameComposition } from '../public/composition.js';
 import { readFile } from 'node:fs/promises';
 import { spotifyLinks } from '../public/media.js';
 import { photoInterval, rhythmDescription, tempoLabel } from '../public/rhythm.js';
@@ -9,7 +10,7 @@ function html(value) {
 }
 
 // This function is embedded in each postcard. It uses only local files and browser APIs.
-async function openPostcard(engineURL, drawDesign, interval) {
+async function openPostcard(engineURL, drawDesign, interval, layouts) {
   const day = JSON.parse(document.getElementById('day').textContent);
   const byId = id => document.getElementById(id);
   const photo = byId('photo');
@@ -42,10 +43,17 @@ async function openPostcard(engineURL, drawDesign, interval) {
   document.addEventListener('visibilitychange', schedule);
   setMotion(animating);
 
+  function compose(index) {
+    const layout = layouts[index];
+    photo.style.objectPosition = layout.x*100 + '% ' + layout.y*100 + '%';
+    scene.classList.toggle('caption-top',layout.top);
+    scene.querySelector('.cover-caption').style.textAlign=layout.align;
+  }
+  compose(0);
   function select(i) {
     current = (i + day.photos.length) % day.photos.length;
     photo.src = day.photos[current].src;
-    photo.alt = day.photos[current].name;
+    photo.alt = day.photos[current].name; compose(current);
     byId('count').textContent = (current + 1) + ' / ' + day.photos.length;
     schedule();
   }
@@ -133,6 +141,7 @@ figure{margin:0;min-width:0}
 #scene.calm img{filter:saturate(.8) contrast(.94)}#scene.dream img{filter:sepia(.15) contrast(1.1)}#scene.joy img{filter:saturate(1.15) brightness(1.04)}#scene.energy img{filter:saturate(1.2) contrast(1.1)}
 .playing img{animation:pan var(--pan-duration,29s) ease-in-out infinite alternate}@keyframes pan{to{transform:scale(1.018) translateX(.3%)}}@media(prefers-reduced-motion:reduce){.playing img{animation:none}}
 .cover-caption{position:absolute;bottom:8%;left:9%;right:9%;z-index:2;margin:0;font:italic clamp(22px,3vw,38px)/1.22 Georgia,serif;text-wrap:balance;overflow-wrap:anywhere;text-shadow:0 2px 16px #0009}
+#scene.caption-top .cover-caption{bottom:auto;top:16%}#scene.caption-top:after{inset:0;background:linear-gradient(#141713a8,transparent 68%)}
 body[data-mood=energy] .cover-caption{font-family:system-ui,sans-serif;font-style:normal;font-weight:650;letter-spacing:-.045em}
 figcaption,.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px}figcaption{justify-content:center}
 h1{margin:9px 0 20px;font:clamp(36px,5vw,66px)/.99 Georgia,serif;letter-spacing:-.055em;overflow-wrap:anywhere;text-wrap:balance}
@@ -174,5 +183,5 @@ export async function portablePage(day) {
 <div class="row">${day.track.kind !== 'link' ? '<button id="music" aria-pressed="false">Слушать фрагмент</button>' : ''}${day.track.url ? '<a target="_blank" rel="noopener noreferrer" href="' + html(day.track.url) + '">' + (spotify?'Открыть в Spotify':'Открыть трек') + '</a>' : ''}${day.voice ? '<button id="voice" aria-pressed="false">Прочесть цитату</button>' : ''}</div>
 <p id="status" role="status"></p></section><details><summary>Почему день выглядит так?</summary><ul>${[...day.explanation.slice(0, 3), rhythmDescription(day)].map(line => '<li>' + html(line) + '</li>').join('')}</ul></details></section></article>
 <footer>Личный дневник атмосферы дня</footer></main><script type="application/json" id="day">${safe}</script>
-<script type="module">(${openPostcard.toString()})(${JSON.stringify(source)}, ${drawPostcardDesign.toString()}, ${photoInterval(day.track)})</script></body></html>`;
+<script type="module">(${openPostcard.toString()})(${JSON.stringify(source)}, ${drawPostcardDesign.toString()}, ${photoInterval(day.track)}, ${JSON.stringify(day.photos.map(photo=>frameComposition(photo,day.mood)))})</script></body></html>`;
 }

@@ -1,4 +1,5 @@
 import { api } from './ui.js';
+import { frameComposition } from './composition.js';
 
 const bound = (value, low = 0, high = 1) => Math.max(low, Math.min(high, value));
 
@@ -84,6 +85,13 @@ export async function analyzeDay(text, photos, { date, expectedProvider, signal,
   onPrepared?.();
   const body = { date, text, expectedProvider, photos: frames.map(({ src, samples }) => ({ src, light: photoLight(samples) })) };
   const result = await api('/api/atmosphere', { method: 'POST', body, signal });
+  const focus = photos[0]?.focus;
+  if (focus && result.explanation?.length >= 2) {
+    const layout = frameComposition(photos[0], result.mood);
+    const horizontal = { left: 'слева', right: 'справа', center: 'по центру' }[layout.align];
+    const detail = focus.manual ? 'центр кадра выбрали вы' : 'центр кадра выбран по цветовым границам и контрасту';
+    result.explanation[1] += ' На обложке ' + detail + '. Подпись ' + (layout.top ? 'сверху' : 'снизу') + ', ' + horizontal + '.';
+  }
   return { ...result, weather: weatherNames[result.weatherType], palette };
 }
 
@@ -159,14 +167,40 @@ function tonalMode(buffer, length) {
   return best.major > best.minor ? 'major' : 'minor';
 }
 
+function pulseBpm(pulse, rate, hop) {
+  const average = pulse.reduce((a, b) => a + b, 0) / pulse.length;
+  const correlations = [];
+  for (let lag = 32; lag <= 101; lag++) {
+    let corr = 0, a2 = 0, b2 = 0;
+    for (let i = lag; i < pulse.length; i++) {
+      const a = pulse[i] - average, b = pulse[i - lag] - average;
+      corr += a * b; a2 += a * a; b2 += b * b;
+    }
+    correlations[lag] = corr / Math.sqrt(a2 * b2 || 1);
+  }
+  const peaks = [];
+  for (let lag = 33; lag <= 100; lag++) {
+    if (correlations[lag] >= correlations[lag - 1] && correlations[lag] >= correlations[lag + 1]) peaks.push(lag);
+  }
+  const strongest = peaks.reduce((best, lag) => correlations[lag] > correlations[best] ? lag : best, peaks[0]);
+  if (average > .00015 && correlations[strongest] > .22) {
+    const lag = peaks.find(candidate => correlations[candidate] >= correlations[strongest] - .07 &&
+      Math.abs(strongest - candidate * Math.round(strongest / candidate)) <= 2) ?? strongest;
+    const before = correlations[lag - 1], peak = correlations[lag], after = correlations[lag + 1];
+    const offset = before + after === 2 * peak ? 0 : .5 * (before - after) / (before - 2 * peak + after);
+    return Math.round(60 * rate / (hop * (lag + offset)));
+  }
+  return null;
+}
+
 // Compare the onset envelope with delayed copies to estimate the musical pulse.
 // No tempo is reported for silence, unpitched noise or an ambiguous pulse.
-export function audioSignals(buffer) {
+function analyzeExcerpt(buffer, includeMode = true) {
   const rate = buffer.sampleRate, hop = Math.max(1, Math.round(rate / 100));
   const length = Math.min(buffer.length, Math.floor(rate * 30));
   if (length < hop * 30) return { bpm: null };
   const channels = Array.from({ length: buffer.numberOfChannels }, (_, i) => buffer.getChannelData(i));
-  const envelope = [], levels = [];
+  const envelope = [], highs = [], levels = [];
   let windowPower = 0;
   let preceding = 0, precedingHigh = 0, total = 0, crossings = 0, last = 0;
   for (let start = 0; start + hop <= length; start += hop) {
@@ -181,6 +215,7 @@ export function audioSignals(buffer) {
     }
     total += power; windowPower += power;
     const rms = Math.sqrt(power / hop), high = Math.sqrt(treble / hop);
+    highs.push(Math.max(0, high - precedingHigh));
     envelope.push(Math.max(0, rms - preceding) + Math.max(0, high - precedingHigh) * 0.6);
     if (envelope.length % 8 === 0) {
       levels.push(Math.sqrt(windowPower / (8 * hop))); windowPower = 0;
@@ -189,39 +224,63 @@ export function audioSignals(buffer) {
   }
   const energy = bound(Math.sqrt(total / length) * 3.4);
   const brightness = bound(crossings / length * rate / 7200);
-  let bpm = null;
+  let bpm = null, pulseStatus = 'weak';
   levels.sort((a, b) => a - b);
   const quiet = levels[Math.floor(levels.length * 0.1)] || 0;
   const loud = levels[Math.floor(levels.length * 0.9)] || 0;
   if (loud - quiet > 0.08 * loud && envelope.length >= 300) {
     // Smooth adjacent bins so that a beat falling between two bins does not
     // give its double-length lag a systematic advantage.
-    const pulse = envelope.map((value, index) =>
-      ((envelope[index - 1] || 0) + 2 * value + (envelope[index + 1] || 0)) / 4);
-    const average = pulse.reduce((a, b) => a + b, 0) / pulse.length;
-    const correlations = [];
-    for (let lag = 32; lag <= 101; lag++) {
-      let corr = 0, a2 = 0, b2 = 0;
-      for (let i = lag; i < pulse.length; i++) {
-        const a = pulse[i] - average, b = pulse[i - lag] - average;
-        corr += a * b; a2 += a * a; b2 += b * b;
-      }
-      correlations[lag] = corr / Math.sqrt(a2 * b2 || 1);
+    const smooth = bins => bins.map((value, index) =>
+      ((bins[index - 1] || 0) + 2 * value + (bins[index + 1] || 0)) / 4);
+    const pulse = smooth(envelope), treblePulse = smooth(highs);
+    const sections = [], highSections = [];
+    for (let start = 0; start + 600 <= pulse.length; start += 300) {
+      sections.push(pulseBpm(pulse.slice(start, start + 600), rate, hop));
+      highSections.push(pulseBpm(treblePulse.slice(start, start + 600), rate, hop));
     }
-    const peaks = [];
-    for (let lag = 33; lag <= 100; lag++) {
-      if (correlations[lag] >= correlations[lag - 1] && correlations[lag] >= correlations[lag + 1]) peaks.push(lag);
-    }
-    const strongest = peaks.reduce((best, lag) => correlations[lag] > correlations[best] ? lag : best, peaks[0]);
-    if (average > .00015 && correlations[strongest] > .22) {
-      const lag = peaks.find(candidate => correlations[candidate] >= correlations[strongest] - .07 &&
-        Math.abs(strongest - candidate * Math.round(strongest / candidate)) <= 2) ?? strongest;
-      const before = correlations[lag - 1], peak = correlations[lag], after = correlations[lag + 1];
-      const offset = before + after === 2 * peak ? 0 : .5 * (before - after) / (before - 2 * peak + after);
-      bpm = Math.round(60 * rate / (hop * (lag + offset)));
+    const globalBpm = pulseBpm(pulse, rate, hop);
+    const reliable = sections.filter(Number.isFinite);
+    // Hi-hat and snare can change metre while the kick repeats its old subdivision.
+    const highVotes = highSections.filter(Number.isFinite);
+    const differentMetre = highVotes.length >= 2 && highVotes.filter(value => globalBpm &&
+      [0.5, 1, 2].every(multiple => Math.abs(value / globalBpm / multiple - 1) > .06)).length > highVotes.length / 2;
+    const octaveConflict = globalBpm && highVotes.length >= 3 && highVotes.filter(value =>
+      [.5, 2].some(multiple => Math.abs(value / globalBpm / multiple - 1) < .055)).length > highVotes.length / 2;
+    if (octaveConflict) {
+      pulseStatus = 'ambiguous';
+    } else if (!differentMetre && globalBpm && (sections.length < 2 || (reliable.length >= Math.ceil(sections.length * .6) &&
+        reliable.filter(value => Math.abs(value / globalBpm - 1) <= .055).length >= reliable.length * .75))) {
+      bpm = globalBpm;
+    } else if (!globalBpm && highVotes.length >= 3 && highVotes.length >= sections.length * .75 &&
+        Math.max(...highVotes) / Math.min(...highVotes) < 1.045) {
+      const highBpm = Math.round(highVotes.reduce((sum, value) => sum + value, 0) / highVotes.length);
+      if (reliable.filter(value => Math.abs(value / highBpm - 1) <= .055).length >= 2) bpm = highBpm;
+    } else if (differentMetre || reliable.length >= 2 && Math.max(...reliable) / Math.min(...reliable) > 1.12) {
+      pulseStatus = 'variable';
     }
   }
-  return { bpm, energy, brightness, mode: energy > 0.008 ? tonalMode(buffer, length) : null };
+  return { bpm, pulseStatus: bpm ? 'steady' : pulseStatus, energy, brightness, mode: includeMode && energy > 0.008 ? tonalMode(buffer, length) : null };
+}
+
+export function audioSignals(buffer) {
+  const result = analyzeExcerpt(buffer);
+  // A quiet intro or a change after the first verse should not define a whole song.
+  if (buffer.length <= 60 * buffer.sampleRate) return result;
+  const length = Math.round(12 * buffer.sampleRate);
+  const estimates = [result.bpm];
+  for (const fraction of [.5, .85]) {
+    const start = Math.floor((buffer.length - length) * fraction);
+    const excerpt = { sampleRate: buffer.sampleRate, length, numberOfChannels: buffer.numberOfChannels,
+      getChannelData: channel => buffer.getChannelData(channel).subarray(start, start + length) };
+    estimates.push(analyzeExcerpt(excerpt, false).bpm);
+  }
+  const values = estimates.filter(Number.isFinite);
+  if (!['variable', 'ambiguous'].includes(result.pulseStatus) && values.length >= 2 && Math.max(...values) / Math.min(...values) < 1.06) {
+    const bpm = Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
+    return { ...result, bpm, pulseStatus: 'steady' };
+  }
+  return { ...result, bpm: null, pulseStatus: values.length >= 2 ? 'variable' : result.bpm ? 'weak' : result.pulseStatus };
 }
 
 export async function localTrack(file) {

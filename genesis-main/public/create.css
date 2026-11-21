@@ -146,3 +146,10 @@
   .compose input[type=date], .compose input[type=url], .compose input[type=number], .compose textarea { font-size: 16px; }
 }
 @media (prefers-reduced-motion: reduce) { .compose *, .compose *::after { transition: none !important; } }
+
+.compose-thumb .compose-focus {position:absolute;top:3px;left:3px;width:auto;padding:2px 5px;border-radius:4px;background:#20251dcc;color:white;font-size:11px}
+.focus-picker {display:block;position:relative;width:fit-content;max-width:100%;margin:12px auto;padding:0;border:0;background:transparent;cursor:crosshair;line-height:0}
+.focus-picker img {display:block;max-width:100%;max-height:52vh;width:auto;height:auto}
+.focus-picker i {position:absolute;width:22px;height:22px;border:2px solid white;box-shadow:0 0 0 2px #262822;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none}
+
+.compose-tap{background:transparent;color:inherit;border:1px solid #bfc2b7;border-radius:8px;padding:.5rem .75rem;cursor:pointer;margin:.4rem .6rem .3rem 0}
