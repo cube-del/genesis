@@ -1,4 +1,4 @@
-import { api, esc, icon, modal, moods, navigate, shareDialog, toast } from './ui.js';
+import { api, dateLabel, esc, icon, modal, moods, navigate, shareDialog, toast } from './ui.js';
 import { frameComposition } from './composition.js';
 import { audioBands, elapsedSeconds, playingDay, playTrack, progress, recordingAudio, seekTrack, setDucking, spotifyLinks, stopTrack } from './media.js';
 import { mountSpotifyPlayer } from './spotify.js';
@@ -82,13 +82,13 @@ void main(){
  float edge=smoothstep(.42,.96,distance(p,vec2(.5,.5)));
  float grainAmt=(textureShape.y+.18*periph)*(1.+.42*bands.z)*(1.-clearMask*.85);
  c=mix(c,c*(1.-.18*grainAmt)+vec3(.07,.035,.01)*haloAmt,edge*(.22*grainAmt+.28*haloAmt));
- float grainSeed=floor(t*(10.+8.*bands.z));
+ float grainSeed=floor(t*6.);
  float grain=noise(floor(gl_FragCoord.xy/(1.+textureShape.y*2.3))+vec2(grainSeed*.37,grainSeed*.71));
- c+=(grain-.5)*(.01+.065*grainAmt);
+ c+=(grain-.5)*(.006+.038*grainAmt);
  float dots=sin(gl_FragCoord.x*1.25)*sin(gl_FragCoord.y*1.25);
  c-=max(dots,0.)*.085*textureShape.z*(1.-textureShape.y)*(1.-clearMask*.9);
  float wxMask=1.-clearMask*.92;
- float wt=t*(1.+.35*bands.z);
+ float wt=t;
  if(weather<.5){float glow=pow(max(0.,1.-distance(p,vec2(.08+.13*sin(wt*.2),.2))*.94),2.);c+=vec3(.085,.051,.012)*glow*wxMask;}
  else if(weather<1.5){
    float bank=.50+.08*sin(p.x*4.-wt*.35)+.05*sin(p.x*11.-wt*.63);
@@ -188,7 +188,7 @@ function shaderSurface() {
       gl.uniform4f(loc.film,recipe.amberShift,recipe.shadowCool,recipe.halation,recipe.mist);
       gl.uniform4f(loc.textureShape,recipe.brushRadius,recipe.grain,recipe.geometry,0);
       gl.uniform1f(loc.weather,weatherIndex(recipe));
-      gl.uniform1f(loc.t,(time*recipe.particleSpeed)%400);
+      gl.uniform1f(loc.t,(fx.weatherTime ?? (time*recipe.particleSpeed))%400);
       gl.uniform1f(loc.loud,level);
       gl.uniform1f(loc.reveal,fx.reveal ?? 1);
       gl.uniform1f(loc.focus,fx.focus ?? 1);
@@ -292,7 +292,7 @@ function createPhotoGrader(recipe) {
 function cameraAt(seconds, photoIndex, energy, bass, focus, parallaxX = 0, parallaxY = 0) {
   const cycle = seconds * (.085 + energy * .02) + photoIndex * 2.1 - .6;
   return {
-    zoom: 1.03 + .016 * (1 - Math.cos(cycle)) / 2 + clamp(bass, 0, 1) * .035 * focus,
+    zoom: 1.03 + .016 * (1 - Math.cos(cycle)) / 2 + clamp(bass, 0, 1) * .022 * focus,
     x: .012 * Math.sin(cycle) + parallaxX * .016 * (.35 + .65 * focus),
     y: .006 * Math.sin(cycle + .7) + parallaxY * .012 * (.35 + .65 * focus)
   };
@@ -304,9 +304,10 @@ function scene(canvas, day, {dayNumber, onPhoto, onProgress, onScrub, onBands, o
   const photos = day.photos;
   const count = photos.length;
   let shader = shaderSurface(), frame = 0, running = true, visible = true, recording = false;
-  let playing = !reducedMotion.matches, time = 0, lastFrame = null, readyCount = 0;
+  let playing = !reducedMotion.matches, time = 0, weatherTime = 0, lastFrame = null, readyCount = 0;
   let activeIndex = 0, focusChangedAt = 0, nextBeatAt = Infinity;
   let revealStart = reducedMotion.matches ? -5000 : 0, lastBeatPhrase = -1;
+  const smoothBands = { bass: 0, mid: 0, high: 0, pulse: 0 };
   const media = photos.map(item => ({
     item, isVideo: isVideoItem(item), poster: null, video: null, duration: item.duration || 0
   }));
@@ -442,15 +443,14 @@ function scene(canvas, day, {dayNumber, onPhoto, onProgress, onScrub, onBands, o
   function preparePrint() {
     layout = contactSheetLayout(W, H, recipe, count);
     const angular = recipe.typeWeight >= 540;
-    titleFont = (angular ? Math.round(recipe.typeWeight) + ' ' : '500 ') + '40px ' +
-      (angular ? 'Manrope, Arial, sans-serif' : '"Cormorant Garamond", Lora, Georgia, serif');
-    let qSize = angular ? 21 : 25;
+    titleFont = (angular ? '700 38px Oswald, Manrope, Arial, sans-serif' : '500 38px Literata, "Cormorant Garamond", Lora, Georgia, serif');
+    let qSize = angular ? 20 : 23;
     do {
       quoteFont = (angular ? '500 ' : 'italic 400 ') + qSize + 'px ' +
-        (angular ? 'Manrope, Arial, sans-serif' : '"Cormorant Garamond", Lora, Georgia, serif');
+        (angular ? 'Onest, Manrope, Arial, sans-serif' : 'Literata, "Cormorant Garamond", Lora, Georgia, serif');
       ctx.font = quoteFont;
       quoteLines = linesFor(ctx, '«' + caption.replace(/^[«"]|[»"]$/g, '') + '»', layout.footer.w);
-      if (quoteLines.length <= 2 || qSize <= 16) break;
+      if (quoteLines.length <= 2 || qSize <= 15) break;
       qSize -= 2;
     } while (true);
     quoteLineH = Math.round(qSize * 1.24);
@@ -471,7 +471,7 @@ function scene(canvas, day, {dayNumber, onPhoto, onProgress, onScrub, onBands, o
     };
     const seconds = time / 1000;
     const anchor = frameComposition(entry.item, day.mood, w / Math.max(1, h));
-    const camera = cameraAt((time - focusChangedAt) / 1000 * recipe.motionSpeed + slot.index * 3.1, slot.index, day.energy || 0, fx.bass, focus, pointer.nx, pointer.ny);
+    const camera = cameraAt(seconds * recipe.motionSpeed + slot.index * 3.1, slot.index, day.energy || 0, fx.bass, focus, pointer.nx, pointer.ny);
     camera.anchorX = anchor.x;
     camera.anchorY = anchor.y;
     let art = null;
@@ -498,7 +498,7 @@ function scene(canvas, day, {dayNumber, onPhoto, onProgress, onScrub, onBands, o
         ctx.drawImage(source, x + px, y + py, dw, dh);
         ctx.restore();
       }
-      drawWeather(ctx, w, h, weatherIndex(recipe), seconds * recipe.particleSpeed * (1 + fx.high * .5), fx.pulse);
+      drawWeather(ctx, w, h, weatherIndex(recipe), fx.weatherTime ?? (seconds * recipe.particleSpeed), fx.pulse);
       if (focus < .98) {
         ctx.fillStyle = '#0e100d'; ctx.globalAlpha = (1 - focus) * .22; ctx.fillRect(x, y, w, h); ctx.globalAlpha = 1;
       }
@@ -585,12 +585,20 @@ function scene(canvas, day, {dayNumber, onPhoto, onProgress, onScrub, onBands, o
   function paint(completeCaption = false) {
     const audioActive = (playing || recording) && playingDay() === day.id;
     const beatTime = audioActive ? elapsedSeconds() : time / 1000;
-    const beat = recipe.bpm ? Math.exp(-6 * ((beatTime * recipe.bpm / 60) % 1)) : 0;
-    const liveBands = audioActive ? audioBands() : { bass: beat * .55 * recipe.beatReactivity, mid: beat * .35 * .5, high: beat * .28 * .4, level: beat * .45 };
-    const bass = clamp(Math.max(liveBands.bass, beat * recipe.beatReactivity * .75));
-    const mid = clamp(liveBands.mid);
-    const high = clamp(liveBands.high);
-    const pulse = clamp((audioActive ? Math.max(beat, liveBands.level) : beat) * recipe.beatReactivity);
+    const rawBeat = audioActive && recipe.bpm
+      ? Math.exp(-5.5 * ((beatTime * recipe.bpm / 60) % 1))
+      : .16 * (.5 - .5 * Math.cos(beatTime * Math.PI * .55));
+    const liveBands = audioActive ? audioBands() : { bass: rawBeat * .32 * recipe.beatReactivity, mid: rawBeat * .22, high: rawBeat * .18, level: rawBeat * .25 };
+    const targetBass = clamp(Math.max(liveBands.bass, audioActive ? rawBeat * recipe.beatReactivity * .65 : 0));
+    const targetMid = clamp(liveBands.mid);
+    const targetHigh = clamp(liveBands.high);
+    const targetPulse = clamp((audioActive ? Math.max(rawBeat, liveBands.level) : rawBeat) * recipe.beatReactivity);
+    const bandLerp = recording ? 1 : .2;
+    smoothBands.bass += (targetBass - smoothBands.bass) * bandLerp;
+    smoothBands.mid += (targetMid - smoothBands.mid) * bandLerp;
+    smoothBands.high += (targetHigh - smoothBands.high) * bandLerp;
+    smoothBands.pulse += (targetPulse - smoothBands.pulse) * bandLerp;
+    const { bass, mid, high, pulse } = smoothBands;
     onBands?.({ bass, mid, high });
 
     // Smooth Beat Spotlight transition (snappy on hard cuts, gliding on lyrical tracks).
@@ -606,7 +614,7 @@ function scene(canvas, day, {dayNumber, onPhoto, onProgress, onScrub, onBands, o
     pointer.ny += ((recording ? 0 : pointer.targetNy) - pointer.ny) * (lerp || 1);
 
     const reveal = (reducedMotion.matches || recording) ? 1 : clamp((time - revealStart) / 1800);
-    const fx = { reveal, bass, mid, high, pulse };
+    const fx = { reveal, bass, mid, high, pulse, weatherTime };
 
     // 1. Archival Contact Sheet surface tinted from the day's own K-Means palette.
     ctx.fillStyle = recipe.sheetBg || recipe.paper;
@@ -632,7 +640,7 @@ function scene(canvas, day, {dayNumber, onPhoto, onProgress, onScrub, onBands, o
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'left';
     const hy = Math.round(layout.header.h / 2) + 1;
-    ctx.fillText(`№${dayNumber} · ${shortDate}`, layout.header.x, hy);
+    ctx.fillText(`ДТ ${4000 + Number(dayNumber || 1)} · ${shortDate}`, layout.header.x, hy);
     ctx.textAlign = 'center';
     ctx.fillStyle = recipe.sheetMuted;
     ctx.font = '500 14px Consolas, monospace';
@@ -767,7 +775,11 @@ function scene(canvas, day, {dayNumber, onPhoto, onProgress, onScrub, onBands, o
     if (!document.hidden && (recording || (visible && playing))) {
       if (lastFrame === null) lastFrame = ms;
       if (ms - lastFrame >= 32) {
-        if (playing || recording) time += Math.min(ms - lastFrame, 120);
+        const dtMs = Math.min(ms - lastFrame, 120);
+        if (playing || recording) {
+          time += dtMs;
+          weatherTime += (dtMs / 1000) * recipe.particleSpeed * (1 + smoothBands.high * .22);
+        }
         lastFrame = ms;
         const audioActive = (playing || recording) && playingDay() === day.id;
         // Beat Spotlight: advance focus across frames every 8 or 16 beats when not hovering a slot.
@@ -1008,16 +1020,39 @@ function trackBody(day,readOnly,recipe,previewing=false) {
   else if(track.kind==='file') metadata.push(track.studyId?'Этюд DayTrace':'Аудиофайл');
   else if(track.kind==='link') metadata.push('Ваша ссылка');
   metadata.push(tempoLabel(track));
-  if(track.mode==='major'||track.mode==='minor')metadata.push(track.mode==='major'?'Мажор':'Минор');
+  if(track.mode==='major'||track.mode==='minor')metadata.push(track.mode==='major'?'мажор':'минор');
   const env = recipe?.envelope || Array.from({length:44},(_,i)=>Math.abs(Math.sin(i*1.43)*Math.sin(.38*i+.45)));
   const waves=env.slice(0,44).map(v=>`<i style="--height:${18+Math.round(78*v)}%"></i>`).join('');
   const playable=!spotify && (track.kind==='ambient'||Boolean(track.src));
-  return `<section class="dt-sound"><div class="dt-section-title">${icon('headphones',17)}<h2>Звук дня</h2></div>
-  <div class="dt-track"><div class="dt-sleeve" style="--cover-one:${cssColor(day.palette?.[0])};--cover-two:${cssColor(day.palette?.[2])}"><div></div></div><div><h3>${esc(track.title||'Музыка дня')}</h3><p>${esc(track.artist||'DayTrace')}</p></div></div>
-  ${playable?`<div class="dt-player"><button class="dt-play" type="button" data-act="play" aria-label="Воспроизвести фрагмент">${icon('play',18)}</button><div class="dt-wave" data-wave role="slider" aria-label="Перемотка трека" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0">${waves}</div><output data-time>0:00</output></div>`:''}
+  return `<div class="dt-sound-compact">
+  <p class="dt-side-track"><strong>1. «${esc(track.title||'Музыка дня')}»</strong> · ${esc(track.artist||'DayTrace')}</p>
+  <p class="dt-track-meta">${metadata.map(esc).join(' · ')}</p>
+  ${playable?`<div class="dt-player"><button class="dt-play" type="button" data-act="play" aria-label="Воспроизвести фрагмент">${icon('play',16)}</button><div class="dt-wave" data-wave role="slider" aria-label="Перемотка трека" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0">${waves}</div><output data-time>0:00</output></div>`:''}
   ${spotify?`<div data-spotify-player><div data-spotify-frame></div><p class="dt-spotify-status" role="status">Запускаем Spotify…</p></div>`:''}
-  <p class="dt-track-meta">${metadata.map(esc).join(' · ')}</p>${track.reason?`<p class="dt-reason">${esc(track.reason)}</p>`:''}
-  ${url||!readOnly?`<div class="dt-track-links">${url?`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${spotify?'Открыть в Spotify':'Открыть трек'} ${icon('external-link',14)}</a>`:''}${readOnly?'':`<button type="button" data-act="reroll" ${previewing?'hidden':''}>${icon('refresh-cw',14)} Подобрать другой трек</button>`}</div>`:''}</section>`;
+  <div class="dt-track-links">${url?`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${spotify?'Spotify':'Открыть трек'} ${icon('external-link',13)}</a>`:''}${readOnly?'':`<button type="button" data-act="reroll" ${previewing?'hidden':''}>${icon('refresh-cw',13)} Другой трек</button>`}${day.voice && (day.voiceSrc || 'speechSynthesis' in window)?`<button type="button" class="dt-voice-inline" data-act="voice">${icon('volume-2',14)} <span>Послушать запись</span></button>`:''}</div></div>`;
+}
+
+function creditsHTML(day, recipe) {
+  const c = recipe.credits || { text: 35, photo: 30, weather: 17, audio: 18 };
+  const hasVideo = (day.photos || []).some(isVideoItem);
+  const items = [
+    ['ТЕКСТ', c.text, recipe.explanation.composition],
+    [hasVideo ? 'ФОТО И ВИДЕО' : 'ФОТО', c.photo, recipe.explanation.color],
+    ['ПОГОДА', c.weather, recipe.explanation.weather],
+    ['АУДИО', c.audio, recipe.explanation.rhythm]
+  ];
+  return items.map(([label, pct, detail]) =>
+    `<div class="dt-credit-cell"><h3>${label}</h3><strong class="dt-credit-pct">${pct}%</strong><p>${esc(detail)}</p></div>`
+  ).join('');
+}
+
+function sideAList(day, currentIdx = 0) {
+  return `<ol class="dt-side-list">${(day.photos || []).map((photo, i) => {
+    const vid = isVideoItem(photo);
+    const dur = vid && photo.duration ? ` · ${Math.floor(photo.duration / 60)}:${String(Math.round(photo.duration % 60)).padStart(2, '0')}` : '';
+    const title = (photo.name || '').replace(/\.[a-z0-9]{2,5}$/i, '').replace(/[_]+/g, ' ').trim() || (vid ? `Видео ${i + 1}` : `Кадр ${i + 1}`);
+    return `<li class="${i === currentIdx ? 'is-current' : ''}"><button type="button" data-focus-slot="${i}">${i + 1}. ${esc(title)}${i === 0 ? ' (Главный)' : ''}${vid ? ' ▶' + dur : ''}</button><button type="button" class="dt-side-zoom" data-photo="${i}" aria-label="Открыть в лупе">${icon('zoom-in', 13)}</button></li>`;
+  }).join('')}</ol>`;
 }
 
 function tabPanel(day, name) {
@@ -1059,32 +1094,76 @@ export async function renderDay(root, savedDay, {readOnly=false, back='/', days=
   }
   applyBackdrop(recipe);
 
-  const dayNumber = String(Math.max(1, days.findIndex(item => item.id === day.id) + 1)).padStart(2, '0');
+  const orderedDays = [...days].sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+  const catalogIndex = Math.max(0, orderedDays.findIndex(item => item.id === day.id));
+  const dayNumber = String(catalogIndex + 1).padStart(2, '0');
+  const catalogCode = `ДТ ${4001 + catalogIndex}`;
+  const spinDur = () => (60 / Math.max(55, Math.min(180, recipe.bpm || 84)) * 6.4).toFixed(2) + 's';
   const placardIndex = () => [
-    `№ ${dayNumber}`,
-    stamp(day.date),
-    recipe.bpm ? `${Math.round(recipe.bpm)} BPM` : 'БЕЗ ТЕМПА',
-    recipe.weatherLabel.toUpperCase()
-  ].join(' · ');
+    `Записано ${dateLabel(day.date)}`,
+    moods[day.mood]?.label || day.mood,
+    recipe.bpm ? `${Math.round(recipe.bpm)} BPM` : null
+  ].filter(Boolean).join(' · ');
 
   const initialFade=archivePatina(day.date,extraDays).toFixed(4);
   const clipHasSound=()=>!spotifyLinks(day.track) && ['ambient','file'].includes(day.track?.kind);
   const clipLabel=()=>clipHasSound()?'Видео · 15 с':'Видео · 15 с без звука';
-  root.innerHTML=`<article class="dt-page"><div data-weather-layer aria-hidden="true"></div><div class="dt-day-nav">${back?`<button class="dt-back" type="button" data-act="back">${icon('arrow-left',17)} ${readOnly && back==='/'?'На главную':'В архив'}</button>`:''}
-  ${readOnly?'':`<div class="dt-day-actions"><button class="button secondary" type="button" data-act="share">${icon('share',16)} Поделиться</button><a class="button secondary" href="/api/days/${encodeURIComponent(day.id)}/zip" download>${icon('download',16)} Скачать ZIP</a></div>`}</div>
-  <header class="dt-heading"><p class="dt-placard" data-placard>${esc(placardIndex())}</p><h1>${esc(day.title)}</h1></header>
-  <div class="dt-layout"><section class="dt-art-column" style="--fade:${initialFade}" aria-label="Архивный контактный лист дня"><div data-deck></div>${readOnly?'':comparisonStrip()}<div class="dt-stage"><canvas class="patina-card" role="img" aria-label="${esc(day.coverText || day.quote || day.title)}"></canvas><button class="dt-motion" type="button" data-act="motion" disabled></button>${day.photos.length>1?'<div class="dt-shot-progress" aria-hidden="true"></div>':''}<div class="dt-image-error" hidden>Фотография недоступна</div></div>
-  <div class="dt-under-stage"><div class="dt-stage-tools"><button class="dt-text-action" type="button" data-act="loupe">${icon('zoom-in',17)} Рассмотреть фото</button><button class="dt-text-action" type="button" data-act="reveal" title="Повторить проявку памяти">${icon('refresh-cw',15)} Проявить заново</button></div>${day.photos.length>1?`<div class="dt-photo-index"><button class="icon-button" type="button" data-step="-1" aria-label="Предыдущее фото">${icon('chevron-left',16)}</button><span data-index>1 / ${day.photos.length}</span><button class="icon-button" type="button" data-step="1" aria-label="Следующее фото">${icon('chevron-right',16)}</button></div>`:''}</div>
-  </section><aside class="dt-sidebar"><div class="dt-meta-panel"><div class="dt-section-title">${icon('layers',17)}<h2>Атмосфера дня</h2></div>
-  <div class="dt-meta-line"><span>Погода</span><button class="dt-weather-replay" data-act="weather" type="button" title="Повторить погоду дня" aria-label="Повторить погоду дня · ${esc(recipe.weatherLabel)}">${esc(recipe.weatherLabel)} ${icon('refresh-cw',13)}</button></div><div class="dt-meta-line"><span>Площадь полей</span><strong data-print-space>${percent(recipe.whitespace)}</strong></div>
-  <div class="dt-meta-line"><span>Палитра открытки</span><div class="dt-swatches" data-print-palette>${paletteHTML(recipe.palette)}</div></div>
-  <button type="button" class="dt-xray-button" data-act="xray">${icon('scan',17)} Почему день выглядит так?</button></div>
-  <div data-sound>${trackBody(day,readOnly,recipe)}</div>
-  ${day.voice && (day.voiceSrc || 'speechSynthesis' in window)?`<button type="button" class="dt-voice" data-act="voice">${icon('volume-2',18)} <span>Послушать запись</span></button>`:''}
-  ${readOnly?'':`<div class="dt-export"><div class="dt-section-title"><h2>Сохранить открытку</h2></div><div class="dt-export-actions"><button class="button secondary" type="button" data-act="png">${icon('image',16)} PNG</button><button class="button secondary" type="button" data-act="clip">${icon('film',16)} <span>${clipLabel()}</span></button></div><p role="status" data-record-status hidden></p></div>`}
-  </aside></div><section class="dt-folder"><div class="dt-section-title">${icon('folder',19)}<h2>В папке дня</h2></div>
-  <div class="dt-tabs" role="tablist" aria-label="Содержимое папки">${[['text','Текст записи'],['photos',`Оригиналы · ${day.photos.length}`],['files','Файлы']].map(([key,label],i)=>`<button type="button" id="dt-tab-${key}" role="tab" aria-controls="dt-tab-panel" aria-selected="${!i}" tabindex="${i?-1:0}" data-tab="${key}">${label}</button>`).join('')}</div>
-  <div id="dt-tab-panel" class="dt-tab-panel" role="tabpanel" aria-labelledby="dt-tab-text">${tabPanel(day,'text')}</div></section></article>`;
+  const twoColStory = String(day.text || '').trim().length >= 130;
+  root.innerHTML=`<article class="dt-page"><div data-weather-layer aria-hidden="true"></div>
+  <div class="dt-day-nav">${back?`<button class="dt-back" type="button" data-act="back">${icon('arrow-left',16)} ${readOnly && back==='/'?'На главную':'К ящику'}</button>`:''}
+  <div class="dt-day-actions"><button class="button secondary" type="button" data-act="xray">Почему так?</button>${readOnly?'':`<button class="button secondary" type="button" data-act="share">Поделиться</button><a class="button primary" href="/api/days/${encodeURIComponent(day.id)}/zip" download>Скачать ZIP</a>`}</div></div>
+
+  <div class="dt-gatefold">
+    <section class="dt-gatefold-left dt-art-column" style="--fade:${initialFade};--vinyl-spin:${spinDur()}" aria-label="Лицевая обложка пластинки дня">
+      <div class="dt-sleeve-assembly">
+        <button type="button" class="dt-vinyl-disc" data-act="vinyl" aria-label="Пластинка дня: запустить или остановить музыку" style="--disc-label:${cssColor(recipe.frameHighlight || recipe.palette.at(-1))};--disc-ring:${cssColor(recipe.sheetBg)}">
+          <span class="dt-vinyl-label"><b>${esc(catalogCode)}</b><em>${recipe.bpm ? Math.round(recipe.bpm) + ' BPM' : 'LP'}</em></span>
+        </button>
+        <div class="dt-stage"><canvas class="patina-card" role="img" aria-label="${esc(day.coverText || day.quote || day.title)}"></canvas><button class="dt-motion" type="button" data-act="motion" disabled></button>${day.photos.length>1?'<div class="dt-shot-progress" aria-hidden="true"></div>':''}<div class="dt-image-error" hidden>Фотография недоступна</div></div>
+      </div>
+      <div class="dt-under-stage">
+        <div class="dt-stage-tools">
+          <button class="dt-text-action" type="button" data-act="loupe">${icon('zoom-in',15)} Лупа</button>
+          <button class="dt-text-action" type="button" data-act="reveal" title="Повторить проявку памяти">${icon('refresh-cw',14)} Проявить</button>
+          ${readOnly?'':`<button class="dt-text-action" type="button" data-act="png">${icon('image',14)} PNG</button><button class="dt-text-action" type="button" data-act="clip">${icon('film',14)} <span>${clipLabel()}</span></button>`}
+        </div>
+        ${day.photos.length>1?`<div class="dt-photo-index"><button class="icon-button" type="button" data-step="-1" aria-label="Предыдущий кадр">${icon('chevron-left',15)}</button><span data-index>1 / ${day.photos.length}</span><button class="icon-button" type="button" data-step="1" aria-label="Следующий кадр">${icon('chevron-right',15)}</button></div>`:''}
+      </div>
+      <p class="dt-record-status" role="status" data-record-status hidden></p>
+    </section>
+
+    <aside class="dt-gatefold-right" aria-label="Оборот конверта и вкладыш дня">
+      <header class="dt-liner-head">
+        <div class="dt-liner-top"><span class="dt-cat-code">${esc(catalogCode)}</span><button class="dt-weather-replay" data-act="weather" type="button" title="Повторить погоду дня">${esc(recipe.weatherLabel)} ${icon('refresh-cw',12)}</button></div>
+        <h1>${esc(day.title)}</h1>
+        <p class="dt-liner-sub" data-placard>${esc(placardIndex())}</p>
+      </header>
+
+      <div class="dt-liner-story${twoColStory?' is-columns':''}">${esc(day.text)}</div>
+
+      <section class="dt-sides">
+        <div class="dt-side-col"><h2>Сторона A</h2><div data-side-a>${sideAList(day, 0)}</div></div>
+        <div class="dt-side-col"><h2>Сторона B</h2><div data-sound>${trackBody(day,readOnly,recipe)}</div></div>
+      </section>
+
+      <section class="dt-credits" aria-label="Кредиты: кто сколько сыграл в дне">
+        <div class="dt-credits-grid" data-credits>${creditsHTML(day, recipe)}</div>
+        <div class="dt-colophon">
+          <span>Палитра: <span class="dt-swatches" data-print-palette>${paletteHTML(recipe.palette)}</span></span>
+          <span>Поля: <strong data-print-space>${percent(recipe.whitespace)}</strong></span>
+          <button type="button" class="dt-colophon-xray" data-act="xray">Все параметры →</button>
+        </div>
+      </section>
+    </aside>
+  </div>
+
+  <div class="dt-below-spread">
+    ${readOnly?'':comparisonStrip()}
+    <div data-deck></div>
+    <section class="dt-folder"><div class="dt-section-title">${icon('folder',17)}<h2>В папке дня</h2></div>
+    <div class="dt-tabs" role="tablist" aria-label="Содержимое папки">${[['photos',`Оригиналы · ${day.photos.length}`],['files','Файлы'],['text','Текст записи']].map(([key,label],i)=>`<button type="button" id="dt-tab-${key}" role="tab" aria-controls="dt-tab-panel" aria-selected="${!i}" tabindex="${i?-1:0}" data-tab="${key}">${label}</button>`).join('')}</div>
+    <div id="dt-tab-panel" class="dt-tab-panel" role="tabpanel" aria-labelledby="dt-tab-photos">${tabPanel(day,'photos')}</div></section>
+  </div></article>`;
 
   const find=q=>root.querySelector(q);
   let spotifyPlayer;
@@ -1134,6 +1213,7 @@ export async function renderDay(root, savedDay, {readOnly=false, back='/', days=
       deck.selectPhoto(index);
       const counter=find('.dt-photo-index [data-index]');
       if(counter)counter.textContent=`${index+1} / ${day.photos.length}`;
+      root.querySelectorAll('[data-side-a] li').forEach((li,i)=>li.classList.toggle('is-current',i===index));
       find('.dt-image-error').hidden=true;
       motionButton.disabled=capturing;
     },
@@ -1158,8 +1238,9 @@ export async function renderDay(root, savedDay, {readOnly=false, back='/', days=
   function musicState(){
     if(!live)return;
     const active=playingDay()===day.id, button=find('[data-act=play]');
-    if(button){button.innerHTML=icon(active?'pause':'play',18);button.setAttribute('aria-label',active?'Остановить фрагмент':'Воспроизвести фрагмент');}
+    if(button){button.innerHTML=icon(active?'pause':'play',16);button.setAttribute('aria-label',active?'Остановить фрагмент':'Воспроизвести фрагмент');}
     find('.dt-player')?.classList.toggle('is-playing',active);
+    find('.dt-gatefold-left')?.classList.toggle('is-playing',active);
     const audition=find('[data-act=audition]');
     if(audition && comparison){
       audition.hidden=!clipHasSound();
@@ -1347,7 +1428,7 @@ export async function renderDay(root, savedDay, {readOnly=false, back='/', days=
     spotifyPlayer?.destroy(); spotifyPlayer=null;
     find('[data-sound]').innerHTML=trackBody(day,readOnly,recipe,Boolean(comparison));
     mountDayMusic();
-    find('[data-act=clip] span').textContent=clipLabel();
+    const clipBtn=find('[data-act=clip] span'); if(clipBtn)clipBtn.textContent=clipLabel();
     musicState();
   }
   function applyTrack(track) {
@@ -1359,6 +1440,9 @@ export async function renderDay(root, savedDay, {readOnly=false, back='/', days=
     find('[data-placard]').textContent=placardIndex();
     find('[data-print-palette]').innerHTML=paletteHTML(recipe.palette);
     find('[data-print-space]').textContent=percent(recipe.whitespace);
+    const creditsEl=find('[data-credits]'); if(creditsEl)creditsEl.innerHTML=creditsHTML(day,recipe);
+    const leftCol=find('.dt-gatefold-left'); if(leftCol)leftCol.style.setProperty('--vinyl-spin',spinDur());
+    const vinylBpm=find('.dt-vinyl-label em'); if(vinylBpm)vinylBpm.textContent=recipe.bpm?Math.round(recipe.bpm)+' BPM':'LP';
     weather.setSpeed(recipe.particleSpeed);
     refreshSound();
   }
@@ -1503,6 +1587,7 @@ export async function renderDay(root, savedDay, {readOnly=false, back='/', days=
     }
     const button=event.target.closest('button');if(!button||!root.contains(button)||deckHost.contains(button))return;
     if(button.dataset.step){await showPhoto(index+Number(button.dataset.step));return;}
+    if(button.dataset.focusSlot!==undefined){await showPhoto(Number(button.dataset.focusSlot));return;}
     if(button.dataset.photo!==undefined){openLoupe(day,Number(button.dataset.photo),recipe);return;}
     if(button.dataset.tab){setTab(button.dataset.tab);return;}
     try {
@@ -1519,7 +1604,14 @@ export async function renderDay(root, savedDay, {readOnly=false, back='/', days=
           if(playingDay()===day.id){comparison.position=elapsedSeconds();stopTrack();}
           else await playTrack(day,musicState,{offsetSeconds:comparison.position});
           musicState();break;
+        case 'vinyl':
         case 'play':
+          if(!clipHasSound()){
+            const sp=spotifyLinks(day.track);
+            if(sp){toast('Включите воспроизведение в плеере Spotify на обороте конверта.');break;}
+            if(day.track?.url){window.open(day.track.url,'_blank','noopener');break;}
+            break;
+          }
           if(playingDay()===day.id)stopTrack();
           else {
             const firstReveal = !hasRevealedAudio && !reduce.matches;

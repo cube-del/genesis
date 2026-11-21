@@ -1,12 +1,12 @@
 .compose {
-  --c-ink: #1d1f1b;
-  --c-muted: #63655d;
-  --c-line: #d5d3ca;
-  --c-paper: #f5f3ed;
-  --c-accent: #c84b2a;
+  --c-ink: #141414;
+  --c-muted: #5E5A50;
+  --c-line: rgba(20, 20, 20, .18);
+  --c-paper: #ECE5D5;
+  --c-accent: #D2402A;
   width: min(1080px, calc(100% - 80px));
   margin: 0 auto;
-  padding: 38px 0 72px;
+  padding: 34px 0 72px;
   color: var(--c-ink);
 }
 .compose [hidden] { display: none !important; }
@@ -19,8 +19,8 @@
 }
 .compose-back { display: inline-flex; align-items: center; gap: 8px; color: var(--c-muted); text-decoration: none; font: 600 12px var(--mono); text-transform: uppercase; letter-spacing: .08em; }
 .compose-back:hover { color: var(--c-ink); }
-.compose-head { margin: 21px 0 32px; padding-bottom: 18px; border-bottom: 1px solid var(--c-line); }
-.compose-head h1 { font-family: var(--serif); color: var(--c-ink); font-size: clamp(44px, 5.2vw, 74px); font-weight: 500; letter-spacing: -.025em; line-height: 1.02; margin: 0; }
+.compose-head { margin: 21px 0 32px; padding-bottom: 18px; border-bottom: 1.5px solid var(--c-ink); }
+.compose-head h1 { font-family: var(--display); color: var(--c-ink); font-size: clamp(44px, 5.2vw, 72px); font-weight: 700; text-transform: uppercase; letter-spacing: -.015em; line-height: .96; margin: 0; }
 .compose-head h1 span { color: var(--c-accent); }
 .compose-head p { color: var(--c-muted); font: 12px/1.55 var(--mono); text-transform: uppercase; letter-spacing: .07em; margin: 12px 0 0; }
 .compose-grid { display: grid; grid-template-columns: minmax(0, 1.37fr) minmax(260px, .76fr); align-items: start; gap: clamp(30px, 6vw, 90px); }

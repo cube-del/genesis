@@ -131,7 +131,7 @@ export function mountDayWeather(host, day, recipe) {
   const texture = context && ['warm_haze','mist'].includes(sky) ? cloudTexture(random, sky === 'warm_haze') : null;
   const particles = Array.from({length: 190}, () => ({ x: random(), y: random(), phase: random() * tau, depth: random() }));
   let width = 0, height = 0, visible = [], frame = 0, timer = 0, last = -Infinity, done = false;
-  let sizeObserver, highBoost = 0;
+  let sizeObserver, highBoost = 0, smoothBoost = 0, simTime = 0, lastSimNow = performance.now();
   const cursor = { x: 0, y: 0, strength: 0, target: 0 };
   const start = performance.now();
   host.classList.add('dt-day-weather');
@@ -141,7 +141,6 @@ export function mountDayWeather(host, day, recipe) {
 
   function paint(seconds) {
     if (!context || width <= 0 || height <= 0) return;
-    seconds *= speed * (1 + highBoost * .75);
     context.clearRect(0, 0, width, height);
     if (sky === 'rain_glass') drawRain(context, visible, width, height, seconds);
     else if (sky === 'wind_sparks') drawWind(context, visible, width, height, seconds, accent);
@@ -172,7 +171,7 @@ export function mountDayWeather(host, day, recipe) {
     canvas.height = Math.max(1, Math.round(height * ratio));
     context?.setTransform(ratio, 0, 0, ratio, 0, 0);
     visible = particles.slice(0, Math.max(16, Math.round(width * height / (sky === 'rain_glass' ? 6800 : 12500))));
-    paint(reduced.matches ? 0 : (performance.now() - start) / 1000);
+    paint(reduced.matches ? 0 : simTime);
   }
   function destroy() {
     if (done) return;
@@ -196,11 +195,15 @@ export function mountDayWeather(host, day, recipe) {
     const elapsed = now - start;
     if (elapsed >= duration) return destroy();
     if (now - last >= frameTime - 1) {
+      const dt = Math.min(0.1, Math.max(0, (now - lastSimNow) / 1000));
+      lastSimNow = now;
       last = now;
+      smoothBoost += (highBoost - smoothBoost) * 0.14;
+      simTime += dt * speed * (1 + smoothBoost * 0.35);
       const enter = smooth(Math.min(1, elapsed / 680));
       const leave = smooth(Math.min(1, Math.max(0, (duration - elapsed) / 2600)));
       host.style.opacity = String((.16 + .84 * enter) * leave);
-      paint(elapsed / 1000);
+      paint(simTime);
     }
     frame = window.requestAnimationFrame(animate);
   }
@@ -208,6 +211,7 @@ export function mountDayWeather(host, day, recipe) {
     window.cancelAnimationFrame(frame);
     if (done || document.hidden) return;
     if (performance.now() - start >= duration) return destroy();
+    lastSimNow = performance.now();
     if (reduced.matches || !context) {
       host.style.opacity = '.27';
       paint(0);

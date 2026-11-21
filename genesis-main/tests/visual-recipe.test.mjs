@@ -173,6 +173,8 @@ test('contact sheet mat and photo frame match the day color grade instead of sta
     }
     assert.ok(hexLuma(r.sheetBg) <= 0.80, `${day.id}.sheetBg should stay color-graded, not white (${r.sheetBg})`);
     assert.ok(hexLuma(r.frameBorder) <= 0.80, `${day.id}.frameBorder should stay color-graded (${r.frameBorder})`);
+    const sum = r.credits.text + r.credits.photo + r.credits.weather + r.credits.audio;
+    assert.equal(sum, 100, `${day.id}.credits should sum to 100%`);
   }
   const exam = buildVisualRecipe(demo.find(d => d.id === 'after-exam'));
   const flat = buildVisualRecipe(demo.find(d => d.id === 'last-apartment'));

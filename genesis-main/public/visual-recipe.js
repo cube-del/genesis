@@ -250,6 +250,21 @@ export function buildVisualRecipe(day = {}) {
       : track.bpmSource === 'catalog' ? 'По каталогу Spotify · ' : '') + bpm + ' BPM'
     : 'Темп неизвестен, взят базовый интервал';
   const cut = cutSharpness >= .68 ? 'резкая склейка в бит' : 'плавный crossfade по музыкальной фразе';
+  // Honest deterministic contribution credits ("кто сколько сыграл в дне") for the gatefold liner notes.
+  // Purely parametric from text structure, photo/video profile, weather effect and audio signals (never day.mood).
+  const wordCount = (String(day.text || day.quote || '').match(/[\p{L}\p{N}]+/gu) || []).length;
+  const rawTextW = 24 + Math.min(20, Math.round(wordCount / 5)) + Math.round((text.reflectiveness + nostalgia + Math.abs(text.socialDensity - .5)) * 7);
+  const photoCount = Array.isArray(day.photos) ? day.photos.length : 1;
+  const rawPhotoW = 20 + Math.min(10, photoCount * 2) + Math.round((photo.contrast * 18 + Math.abs(photo.warmth - .5) * 14 + (hasVideoMotion ? 7 + videoMotion * 6 : 0)));
+  const rawWeatherW = 12 + (recipe.weatherType === 'clear_light' ? 3 : 8) + Math.round((recipe.mist + recipe.halation + recipe.amberShift / 10) * 6);
+  const rawAudioW = 12 + (bpm ? 7 : 1) + (track.mode ? 4 : 0) + Math.round((Math.abs(brightness - .5) + percussion * .6 + recipe.beatReactivity * .5) * 9);
+  const weightSum = rawTextW + rawPhotoW + rawWeatherW + rawAudioW;
+  const cText = Math.round(rawTextW / weightSum * 100);
+  const cPhoto = Math.round(rawPhotoW / weightSum * 100);
+  const cWeather = Math.round(rawWeatherW / weightSum * 100);
+  const cAudio = Math.max(5, 100 - cText - cPhoto - cWeather);
+  recipe.credits = { text: cText, photo: cPhoto, weather: cWeather, audio: cAudio };
+
   recipe.explanation = {
     composition: `${social}${minor ? ' и минорный лад' : ''}. Поля занимают ${percent(whitespace)} площади карточки. Слов на предложение в среднем — ${text.averageWords.toLocaleString('ru', {maximumFractionDigits:1})}. Интонация задаёт плотность линий и вес шрифта.`,
     color: `Палитра снимков ${basePalette.slice(0, 2).join(', ')}. Насыщенность ${percent(recipe.saturation)}, контраст ${percent(recipe.contrast)}.` +
