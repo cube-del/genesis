@@ -3,6 +3,8 @@ import {playTrack,stopTrack,playingDay,spotifyLinks} from './media.js';
 import {showSpotifyPlayer} from './spotify.js';
 
 import {archivePatina} from './patina.js';
+import {buildVisualRecipe} from './visual-recipe.js';
+import {contactSheetLayout} from './postcard.js';
 
 const main=document.querySelector('#main');
 const header=document.querySelector('#site-header');
@@ -32,32 +34,97 @@ document.addEventListener('click',event=>{
   const link=event.target.closest('a[data-nav]');
   if(link && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey && event.button===0){event.preventDefault();navigate(link.getAttribute('href'))}
 });
-function weatherIcon(day){
-  return ({warm_haze:'sunrise',mist:'cloud',rain_glass:'rain',wind_sparks:'wind',clear_light:'sun'}[day.weatherType]||'sun');
+function shortStamp(iso){
+  return new Intl.DateTimeFormat('ru-RU',{day:'2-digit',month:'2-digit',year:'2-digit'}).format(new Date(iso+'T12:00:00'));
 }
-function palette(day) {
-  return '<span class="palette" aria-label="Палитра фотографий">'+day.palette.map(c=>'<i style="background:'+esc(c)+'"></i>').join('')+'</span>';
+function weatherIcon(type){
+  return ({warm_haze:'sunrise',mist:'cloud',rain_glass:'rain',wind_sparks:'wind',clear_light:'sun'}[type]||'sun');
+}
+function palette(colors) {
+  return '<span class="palette" aria-label="Палитра открытки">'+colors.map(c=>'<i style="background:'+esc(c)+'"></i>').join('')+'</span>';
 }
 function dayUrl(id){return shared?basePath+'?day='+encodeURIComponent(id):'/day/'+encodeURIComponent(id)}
+function isVideo(item){
+  return Boolean(item) && (item.kind==='video' || /\.(?:mp4|webm|mov|m4v|ogv)(?:$|\?)/i.test(item.src||''));
+}
+function archivePosition(photo){
+  const f=photo?.focus;
+  return f && Number.isFinite(f.x) && Number.isFinite(f.y)
+    ? ' style="object-position:'+(f.x*100).toFixed(1)+'% '+(f.y*100).toFixed(1)+'%"' : '';
+}
 function heroMarkup() {
   const day=heroOrder[heroIndex];if(!day)return '';
+  const recipe=buildVisualRecipe(day);
   const coverText = day.coverText || '«' + day.quote.replace(/[.!?…]$/,'') + '»';
+  const indexLine = ['№ ' + num(heroIndex + 1), shortStamp(day.date), recipe.bpm ? Math.round(recipe.bpm) + ' BPM' : null, recipe.weatherLabel.toUpperCase()].filter(Boolean).join(' · ');
   const label=heroOrder.length>1?'<div class="reel-nav"><span aria-live="polite">'+num(heroIndex+1)+' <em>/</em> '+num(heroOrder.length)+'</span><button class="reel-button" data-hero-step="-1" aria-label="Предыдущее воспоминание">'+icon('chevron-left',19)+'</button><button class="reel-button" data-hero-step="1" aria-label="Следующее воспоминание">'+icon('chevron-right',19)+'</button></div>':'';
-  return '<article class="hero patina-card" '+ageAttributes(day)+' data-frame="'+esc(day.id)+'" aria-label="Воспоминание в фокусе"><img class="hero-photo" fetchpriority="high" src="'+esc(day.photos[0].src)+'" alt=""><div class="hero-shade"></div><div class="hero-grain" aria-hidden="true"></div><div class="focus-tag">'+icon('scan',14)+'В фокусе</div><div class="hero-details"><div class="hero-date">'+dateLabel(day.date)+'<b></b>'+icon(weatherIcon(day),15)+' '+esc(day.weather)+'</div><h2>'+esc(day.title)+'</h2><p class="hero-quote">'+esc(coverText)+'</p><div class="hero-actions"><a data-nav href="'+dayUrl(day.id)+'" class="button hero-open">Открыть день '+icon('arrow-up-right',16)+'</a><button type="button" class="hero-audio" data-sound="'+esc(day.id)+'" aria-label="Послушать '+esc(day.track.title)+'"><span class="audio-ring">'+icon('play',13)+'</span><span class="hero-track-name">'+esc(day.track.title)+'</span></button></div></div>'+label+'</article>';
+  const first = day.photos[0];
+  const heroMedia = isVideo(first)
+    ? '<video class="hero-photo" autoplay muted loop playsinline'+archivePosition(first)+(first.poster?' poster="'+esc(first.poster)+'"':'')+' src="'+esc(first.src)+'"></video>'
+    : '<img class="hero-photo" fetchpriority="high"'+archivePosition(first)+' src="'+esc(first.src)+'" alt="">';
+  return '<article class="hero patina-card" '+ageAttributes(day)+' data-frame="'+esc(day.id)+'" aria-label="Воспоминание в фокусе">'+heroMedia+'<div class="hero-shade"></div><div class="hero-grain" aria-hidden="true"></div><div class="focus-tag">'+icon('scan',14)+'ЭКСПОНАТ В ФОКУСЕ</div><div class="hero-details"><div class="hero-date">'+esc(indexLine)+'</div><h2>'+esc(day.title)+'</h2><p class="hero-quote">'+esc(coverText)+'</p><div class="hero-actions"><a data-nav href="'+dayUrl(day.id)+'" class="button hero-open">Открыть день '+icon('arrow-up-right',16)+'</a><button type="button" class="hero-audio" data-sound="'+esc(day.id)+'" aria-label="Послушать '+esc(day.track.title)+'"><span class="audio-ring">'+icon('play',13)+'</span><span class="hero-track-name">'+esc(day.track.title)+'</span></button></div></div>'+label+'</article>';
 }
-function card(day){
-  const state=moods[day.mood]||moods.calm;
-  const musicLabel=spotifyLinks(day.track)?'Spotify':day.track.bpm?Math.round(day.track.bpm)+' BPM':'Аудио';
-  return '<article class="memory-tile patina-card" data-card="'+esc(day.id)+'" '+ageAttributes(day)+'><div class="tile-frame"><a class="image-link" data-nav href="'+dayUrl(day.id)+'" aria-label="Открыть '+esc(day.title)+'"><img loading="lazy" src="'+esc(day.photos[0].src)+'" alt="'+esc(day.title)+'"></a>'+
-  '<span class="weather-chip">'+icon(weatherIcon(day),14)+esc(day.weather)+'</span>'+
-  (!shared?'<button class="save-day '+(day.favorite?'saved':'')+'" data-save="'+esc(day.id)+'" aria-pressed="'+!!day.favorite+'" aria-label="'+(day.favorite?'Убрать из избранного':'В избранное')+'">'+icon('bookmark',17)+'</button>':'')+
-  '<span class="tile-palette">'+palette(day)+'</span></div><div class="tile-meta"><time datetime="'+day.date+'">'+dateLabel(day.date)+'</time><span style="--mood-color:'+state.color+'">'+esc(state.label)+'</span></div><h3><a data-nav href="'+dayUrl(day.id)+'">'+esc(day.title)+'</a></h3><div class="tile-audio"><button data-sound="'+esc(day.id)+'" aria-label="Послушать '+esc(day.track.title)+'"><span class="tile-play">'+icon('play',11)+'</span><span>'+esc(day.track.title)+'</span></button><span>'+icon('waveform',15)+' '+musicLabel+'</span></div></article>';
+function miniSignatureSVG(recipe){
+  const env = recipe.envelope || [];
+  const style = recipe.signatureStyle || 'impressionism';
+  if (style === 'film') {
+    const bars = env.slice(0, 32).map((v, i) => {
+      const y = (i / 31) * 100, w = 2 + v * 10;
+      return `<rect x="${(7 - w / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="2.2" fill="currentColor" opacity="${(.38 + v * .55).toFixed(2)}"/>`;
+    }).join('');
+    return `<svg class="cs-optical-svg" viewBox="0 0 14 102" preserveAspectRatio="none" aria-hidden="true">${bars}</svg>`;
+  }
+  const pts = env.slice(0, 44).map((v, i) => {
+    const x = (i / 43) * 180;
+    const y = style === 'constructivism'
+      ? (i % 3 === 0 ? 15 - v * 13 : 15 + v * 4)
+      : style === 'ma'
+        ? 11 + (v - .42) * 15 * Math.sin(i * 1.15 + .4)
+        : 12 - v * 9 * Math.sin(i * .7 + .3);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  return `<svg class="cs-sig-svg" viewBox="0 0 180 22" preserveAspectRatio="none" aria-hidden="true"><polyline fill="none" stroke="currentColor" stroke-width="${style==='ma'?'1.7':'1.25'}" points="${pts}"/></svg>`;
+}
+function card(day, index){
+  const recipe = buildVisualRecipe(day);
+  const count = day.photos.length;
+  const W = 880, H = 1100;
+  const layout = contactSheetLayout(W, H, recipe, count);
+  const pct = (val, base) => ((val / base) * 100).toFixed(2) + '%';
+  const sepia = Math.min(.26, recipe.amberShift / 28);
+  const photoFilter = `saturate(${recipe.saturation.toFixed(2)}) contrast(${recipe.contrast.toFixed(2)}) brightness(${recipe.exposure.toFixed(2)})` + (sepia > .01 ? ` sepia(${sepia.toFixed(2)})` : '');
+  const styleAttr = `--cs-bg:${recipe.sheetBg};--cs-ink:${recipe.sheetInk};--cs-muted:${recipe.sheetMuted};--cs-rule:${recipe.sheetRule};--cs-frame:${recipe.frameBorder};--cs-highlight:${recipe.frameHighlight};--cs-backdrop:${recipe.backdrop};--cs-accent:${recipe.palette.at(-1)};--tile-filter:${photoFilter}`;
+  const slotsHTML = layout.slots.map(slot => {
+    const photo = day.photos[slot.index] || day.photos[0];
+    const pos = `left:${pct(slot.x, W)};top:${pct(slot.y - layout.stage.y, layout.stage.h)};width:${pct(slot.w, W)};height:${pct(slot.h, layout.stage.h)}`;
+    const vid = isVideo(photo);
+    const mediaTag = vid
+      ? `<video src="${esc(photo.src)}"${archivePosition(photo)}${photo.poster ? ` poster="${esc(photo.poster)}"` : ''} muted loop playsinline preload="metadata"></video>`
+      : `<img loading="lazy"${archivePosition(photo)} src="${esc(photo.src)}" alt="${esc(photo.name || day.title)}">`;
+    return `<div class="cs-slot${slot.softEdge ? ' is-soft' : ''}" style="${pos}">${mediaTag}<span class="cs-idx">${slot.label}${vid ? ' ▶' : ''}</span>${slot.timecode ? `<span class="cs-tc">${slot.timecode}</span>` : ''}</div>`;
+  }).join('');
+  const powerHTML = layout.powerCell
+    ? `<div class="cs-power" style="left:${pct(layout.powerCell.x, W)};top:${pct(layout.powerCell.y - layout.stage.y, layout.stage.h)};width:${pct(layout.powerCell.w, W)};height:${pct(layout.powerCell.h, layout.stage.h)}" aria-hidden="true"><svg viewBox="0 0 100 100" preserveAspectRatio="none"><line x1="8" y1="86" x2="92" y2="14" stroke="currentColor" stroke-width="1.2" opacity=".45"/><line x1="52" y1="8" x2="52" y2="92" stroke="currentColor" stroke-width="1" opacity=".35"/><circle cx="52" cy="50" r="21" fill="var(--cs-accent)" opacity=".36"/><circle cx="52" cy="50" r="30" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".68"/></svg></div>`
+    : '';
+  const opticalHTML = layout.style === 'film'
+    ? `<div class="cs-optical" style="left:${pct(layout.sigBox.x, W)};top:${pct(layout.sigBox.y - layout.stage.y, layout.stage.h)};width:${pct(layout.sigBox.w, W)};height:${pct(layout.sigBox.h, layout.stage.h)}" aria-hidden="true">${miniSignatureSVG(recipe)}</div>`
+    : '';
+  const swatches = recipe.palette.slice(0, 4).map(c => `<i style="background:${esc(c)}"></i>`).join('');
+  const quote = day.coverText || day.quote || '';
+  const trackMeta = [day.track?.artist || 'DayTrace', recipe.bpm ? Math.round(recipe.bpm) + ' BPM' : (spotifyLinks(day.track) ? 'Spotify' : null)].filter(Boolean).join(' · ');
+  return `<article class="memory-tile contact-sheet patina-card cs-mode-${esc(layout.style)}${recipe.sheetDark ? ' is-dark' : ''}" data-card="${esc(day.id)}" ${ageAttributes(day)} style="${styleAttr}">` +
+    `<header class="cs-head"><span>№${num(index + 1)} · ${shortStamp(day.date)}</span><span class="cs-weather">${esc(recipe.weatherLabel.toUpperCase())}</span><span class="cs-cal" aria-label="Палитра">${swatches}</span></header>` +
+    `<div class="cs-stage"><a class="cs-stage-link" data-nav href="${dayUrl(day.id)}" aria-label="Открыть ${esc(day.title)}">${slotsHTML}${powerHTML}${opticalHTML}</a>` +
+    (!shared ? `<button class="save-day ${day.favorite ? 'saved' : ''}" data-save="${esc(day.id)}" aria-pressed="${!!day.favorite}" aria-label="${day.favorite ? 'Убрать из избранного' : 'В избранное'}">${icon('bookmark', 14)}</button>` : '') +
+    `</div>` +
+    `<footer class="cs-foot"><h3><a data-nav href="${dayUrl(day.id)}">${esc(day.title)}</a></h3><p class="cs-quote">«${esc(quote.replace(/^[«"]|[»"]$/g, ''))}»</p>` +
+    `<div class="cs-track-bar"><button class="cs-play-btn" data-sound="${esc(day.id)}" aria-label="Послушать ${esc(day.track.title)}"><span class="tile-play">${icon('play', 10)}</span>${layout.style === 'film' ? `<span class="cs-film-label">35MM · ${esc(day.track.title)}</span>` : miniSignatureSVG(recipe)}</button><span class="cs-track-meta">${esc(trackMeta)}</span></div></footer></article>`;
 }
 function updateGrid(){
   let list=currentSet.filter(d=>prefs.filter==='all'||prefs.filter===d.mood);
   list=[...list].sort((a,b)=>prefs.sort==='old'?a.date.localeCompare(b.date):prefs.sort==='warmth'?b.warmth-a.warmth:prefs.sort==='tempo'?(b.track.bpm||0)-(a.track.bpm||0):b.date.localeCompare(a.date));
   const grid=main.querySelector('#day-grid');if(!grid)return;
-  grid.innerHTML=list.length?list.map(card).join(''):'<div class="empty-grid">'+icon(favorites?'bookmark':'folder',28)+'<h3>'+(favorites && !currentSet.length?'Здесь будут любимые дни':'Дней с таким настроением пока нет')+'</h3><p>'+(favorites && !currentSet.length?'Нажмите на закладку в углу фотографии, чтобы сохранить день в избранном.':'Выберите другое настроение или откройте весь архив.')+'</p><button class="button secondary" data-reset-filter>'+(favorites && !currentSet.length?'В архив':'Показать все дни')+'</button></div>';
+  grid.innerHTML=list.length?list.map((d,i)=>card(d,i)).join(''):'<div class="empty-grid">'+icon(favorites?'bookmark':'folder',28)+'<h3>'+(favorites && !currentSet.length?'Здесь будут любимые дни':'Дней с таким настроением пока нет')+'</h3><p>'+(favorites && !currentSet.length?'Нажмите на закладку в углу фотографии, чтобы сохранить день в избранном.':'Выберите другое настроение или откройте весь архив.')+'</p><button class="button secondary" data-reset-filter>'+(favorites && !currentSet.length?'В архив':'Показать все дни')+'</button></div>';
   const count=main.querySelector('#visible-count');if(count) count.textContent=num(list.length);
   refreshSound();
 }
@@ -114,6 +181,14 @@ function refreshSound(){
     b.setAttribute('aria-label',(on?'Пауза':'Послушать')+' '+(track?.title||''));
   });
 }
+main.addEventListener('pointerover',event=>{
+  const card=event.target.closest('.contact-sheet');
+  if(card&&!card.contains(event.relatedTarget)) card.querySelectorAll('video').forEach(v=>v.play().catch(()=>{}));
+});
+main.addEventListener('pointerout',event=>{
+  const card=event.target.closest('.contact-sheet');
+  if(card&&!card.contains(event.relatedTarget)) card.querySelectorAll('video').forEach(v=>v.pause());
+});
 main.addEventListener('click',async event=>{
   if(!main.classList.contains('archive-page'))return;
   const b=event.target.closest('button');if(!b)return;

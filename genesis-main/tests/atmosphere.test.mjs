@@ -111,3 +111,51 @@ test('local rules use the actual quote, distinguish text tones and explain image
   assert.equal(brief.quote, '🎈');
   assert.equal(brief.title, 'Память дня в дневнике');
 });
+
+test('Gemini and local rules understand video keyframes, timestamps and motion dynamics', async () => {
+  const videoItem = {
+    kind: 'video', duration: 14.2, motion: 0.68,
+    frames: [
+      { src: 'data:image/jpeg;base64,' + jpegA, time: 1.4, light: { luma: .25, contrast: .24, warmth: .42 } },
+      { src: 'data:image/jpeg;base64,' + jpegB, time: 7.1, light: { luma: .48, contrast: .28, warmth: .45 } },
+      { src: 'data:image/jpeg;base64,' + jpegA, time: 12.8, light: { luma: .52, contrast: .26, warmth: .46 } }
+    ]
+  };
+  let receivedParts = null;
+  await analyzeAtmosphere({ ...input, photos: [videoItem, smallPhoto(jpegB)] }, {
+    apiKey: 'demo', model: 'gemini-test',
+    async fetchImpl(_url, options) {
+      const body = JSON.parse(options.body);
+      receivedParts = body.contents[0].parts;
+      return success();
+    }
+  });
+  assert.ok(receivedParts.some(p => typeof p.text === 'string' && /Видео 1.*14\.2 с.*68%/.test(p.text)));
+  assert.equal(receivedParts.filter(p => p.inlineData?.mimeType === 'image/jpeg').length, 4);
+
+  const ruleDay = analyzeRuleAtmosphere({ date: '2026-11-21', text: 'Вышли на улицу и включили камеру.', photos: [videoItem] });
+  assert.equal(ruleDay.mood, 'energy');
+  assert.equal(ruleDay.weatherType, 'wind_sparks');
+  assert.equal(ruleDay.videoMotion, 0.68);
+  assert.match(ruleDay.explanation[1], /видео/iu);
+  assert.match(ruleDay.explanation[1], /свет усиливается/iu);
+});
+
+test('локальный анализ учитывает область отрицания и конкретную деталь заголовка', () => {
+  const analyze = text => analyzeRuleAtmosphere({ ...input, text });
+  for (const text of ['Это была не радостная встреча.', 'Радости не было.']) {
+    const day = analyze(text);
+    assert.notEqual(day.mood, 'joy');
+    assert.match(day.explanation[0], /отрицание/iu);
+  }
+  assert.equal(analyze('Было тревожно, но потом мы улыбались и смеялись.').mood, 'joy');
+  assert.equal(analyze('Мы не только улыбались, но и смеялись.').mood, 'joy');
+  assert.equal(analyze('Мы не спеша улыбались.').mood, 'joy');
+  assert.notEqual(analyze('Дождя не было. Мы пили чай.').weatherType, 'rain_glass');
+  const hospital = 'Мы шли домой. За окном больницы впервые за неделю зажгли свет.';
+  const day = analyze(hospital);
+  assert.match(day.title, /больниц/iu);
+  assert.match(day.title, /свет/iu);
+  assert.ok(day.title.split(/\s+/u).length <= 7);
+  assert.ok(hospital.includes(day.quote));
+});

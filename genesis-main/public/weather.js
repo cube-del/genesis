@@ -120,8 +120,9 @@ function drawMotes(ctx, particles, w, h, time, warm) {
   }
 }
 
-export function mountDayWeather(host, day) {
-  const sky = skyFor(day);
+export function mountDayWeather(host, day, recipe) {
+  const sky = recipe.weatherType;
+  let speed=recipe.particleSpeed;
   const random = seededRandom(String(day.id || day.date || '') + sky);
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('2d', { alpha: true });
@@ -130,7 +131,8 @@ export function mountDayWeather(host, day) {
   const texture = context && ['warm_haze','mist'].includes(sky) ? cloudTexture(random, sky === 'warm_haze') : null;
   const particles = Array.from({length: 190}, () => ({ x: random(), y: random(), phase: random() * tau, depth: random() }));
   let width = 0, height = 0, visible = [], frame = 0, timer = 0, last = -Infinity, done = false;
-  let sizeObserver;
+  let sizeObserver, highBoost = 0;
+  const cursor = { x: 0, y: 0, strength: 0, target: 0 };
   const start = performance.now();
   host.classList.add('dt-day-weather');
   host.dataset.sky = sky;
@@ -139,12 +141,26 @@ export function mountDayWeather(host, day) {
 
   function paint(seconds) {
     if (!context || width <= 0 || height <= 0) return;
+    seconds *= speed * (1 + highBoost * .75);
     context.clearRect(0, 0, width, height);
     if (sky === 'rain_glass') drawRain(context, visible, width, height, seconds);
     else if (sky === 'wind_sparks') drawWind(context, visible, width, height, seconds, accent);
     else {
       if (texture) drawClouds(context, texture, width, height, seconds, sky === 'warm_haze');
       if (sky !== 'mist') drawMotes(context, visible, width, height, seconds, sky === 'warm_haze');
+    }
+    cursor.strength += (cursor.target - cursor.strength) * .16;
+    if (cursor.strength > .02) {
+      context.save();
+      context.globalCompositeOperation = 'destination-out';
+      const radius = Math.min(width, height) * .22;
+      const hole = context.createRadialGradient(cursor.x, cursor.y, radius * .12, cursor.x, cursor.y, radius);
+      hole.addColorStop(0, `rgba(0,0,0,${(.92 * cursor.strength).toFixed(3)})`);
+      hole.addColorStop(.55, `rgba(0,0,0,${(.45 * cursor.strength).toFixed(3)})`);
+      hole.addColorStop(1, 'rgba(0,0,0,0)');
+      context.fillStyle = hole;
+      context.beginPath(); context.arc(cursor.x, cursor.y, radius, 0, tau); context.fill();
+      context.restore();
     }
   }
   function size() {
@@ -206,5 +222,10 @@ export function mountDayWeather(host, day) {
   reduced.addEventListener('change', resume);
   timer = window.setTimeout(destroy, duration + 30);
   resume();
-  return { destroy };
+  return {
+    destroy,
+    setSpeed(value) { speed = value; },
+    setHighBoost(value) { highBoost = Math.max(0, Math.min(1, Number(value) || 0)); },
+    setCursor(x, y, active) { cursor.x = x; cursor.y = y; cursor.target = active ? 1 : 0; }
+  };
 }

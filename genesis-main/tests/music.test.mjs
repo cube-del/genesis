@@ -24,6 +24,11 @@ test('по четырём настроениям возвращаются 16 р�
       assert.equal(track.url, 'https://open.spotify.com/track/' + track.id);
       assert.match(track.id, /^[A-Za-z0-9]{22}$/);
       assert.ok(track.title && track.artist && !track.src);
+      assert.ok(Number.isFinite(track.bpm) && track.bpm >= 40 && track.bpm <= 240);
+      assert.equal(track.bpmSource, 'catalog');
+      assert.ok(['major', 'minor'].includes(track.mode));
+      assert.ok(track.brightness >= 0 && track.brightness <= 1);
+      assert.ok(track.percussiveness >= 0 && track.percussiveness <= 1);
       ids.add(track.id);
     }
   }
@@ -115,4 +120,16 @@ test('Spotify Retry-After останавливает повторные обра
   advance(31000);
   await resolve(search);
   assert.equal(log.length,3);
+});
+
+test('темп Deezer принимается только для совпавшего трека с известным BPM', async () => {
+  const { deezerTempo } = await import('../server/music.mjs');
+  for (const [id, bpm, expected] of [[123, 104.4, 104.4], [124, 104.4, null], [123, 0, null]]) {
+    const result = await deezerTempo('123', async url => {
+      assert.equal(url, 'https://api.deezer.com/track/123');
+      return Response.json({ id, bpm });
+    });
+    assert.equal(result.bpm, expected);
+  }
+  assert.deepEqual(await deezerTempo('123', () => { throw Error('offline'); }), { bpm: null });
 });

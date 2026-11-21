@@ -46,7 +46,7 @@ export function chooseGooglePhotos({ limit, onPhotos, onFolder }) {
   const body = modal('Из Google Фото',
     '<p class="dialog-lead" role="status">Проверяем подключение…</p><div class="photo-import-actions">' +
     '<button class="button primary" data-connect type="button" hidden>Подключить Google Фото</button>' +
-    '<a class="button primary" data-picker target="_blank" rel="noopener noreferrer" hidden>Выбрать снимки ' + icon('external-link', 15) + '</a>' +
+    '<a class="button primary" data-picker target="_blank" rel="noopener noreferrer" hidden>Выбрать фото и видео ' + icon('external-link', 15) + '</a>' +
     '<button class="button secondary" type="button" data-folder>' + icon('folder', 16) + ' Из скачанной папки</button></div>' +
     '<details class="photo-import-setup" hidden><summary>Настроить вход через Google</summary><p>Включите Google Photos Picker API, добавьте адрес DayTrace в разрешённые источники OAuth-клиента и укажите его идентификатор в <code>GOOGLE_PHOTOS_CLIENT_ID</code> в файле <code>.env</code>. Затем перезапустите DayTrace. <a href="https://developers.google.com/photos/overview/configure-your-app" target="_blank" rel="noopener noreferrer">Инструкция Google</a></p></details>',
     { onClose() { ctrl.abort(); cleanupSession(); } });
@@ -91,7 +91,7 @@ export function chooseGooglePhotos({ limit, onPhotos, onFolder }) {
             return;
           }
           link.hidden = true;
-          note.textContent = 'Загружаем выбранные снимки…';
+          note.textContent = 'Загружаем выбранные фото и видео…';
           const result = await api(sessionPath + '/photos', options);
           if (ctrl.signal.aborted) return;
           closeModal();
