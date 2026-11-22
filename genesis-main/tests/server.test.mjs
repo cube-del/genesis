@@ -495,3 +495,22 @@ test('маршрут Deezer BPM, точка фокуса кадра и ручн�
   assert.equal(tapped.track.bpmSource, 'tap');
   assert.equal(tapped.track.pulseStatus, 'variable');
 });
+
+test('удаление записи через DELETE /api/days/:id убирает папку, медиа и ссылку доступа', async t => {
+  const { client } = await fixture(t);
+  await client.request('/');
+  const created = await (await client.request('/api/days', 'POST', example)).json();
+  const shared = await (await client.request('/api/share/day/' + created.id, 'PUT', { enabled: true })).json();
+  const token = shared.url.split('/').pop();
+  assert.equal((await client.request('/api/public/day/' + token)).status, 200);
+
+  const removed = await client.request('/api/days/' + created.id, 'DELETE');
+  assert.equal(removed.status, 200);
+  assert.deepEqual(await removed.json(), { deleted: created.id });
+
+  const list = await (await client.request('/api/days')).json();
+  assert.ok(!list.some(item => item.id === created.id));
+  assert.equal((await client.request('/api/days/' + created.id)).status, 404);
+  assert.equal((await client.request('/api/public/day/' + token)).status, 404);
+  assert.equal((await client.request('/api/days/' + created.id, 'DELETE')).status, 404);
+});

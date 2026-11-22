@@ -1,4 +1,4 @@
-import { api, dateLabel, esc, icon, modal, moods, navigate, shareDialog, toast } from './ui.js';
+import { api, closeModal, dateLabel, esc, icon, modal, moods, navigate, shareDialog, toast } from './ui.js';
 import { frameComposition } from './composition.js';
 import { audioBands, elapsedSeconds, playingDay, playTrack, progress, recordingAudio, seekTrack, setDucking, spotifyLinks, stopTrack } from './media.js';
 import { mountSpotifyPlayer } from './spotify.js';
@@ -26,7 +26,11 @@ export function cleanupDay() {
 }
 
 function weatherIndex(recipe) {
-  return ['warm_haze','mist','rain_glass','wind_sparks','clear_light'].indexOf(recipe.weatherType);
+  const idx = [
+    'warm_haze','mist','rain_glass','wind_sparks','clear_light',
+    'snow_drift','starlight','amber_bokeh','petal_drift','neon_pulse'
+  ].indexOf(recipe.weatherType);
+  return idx >= 0 ? idx : 4;
 }
 
 // All styles process the original photographs. Supports Beat Spotlight (focus 0..1)
@@ -70,11 +74,12 @@ void main(){
  float sat=grade.x*(1.-.22*periph);
  float amplitude=min(.5*chroma*sat,min(light,1.-light));
  c=light-amplitude*clamp(min(k-3.,9.-k),-1.,1.);
- c=((c-.5)*grade.y+.5+vec3(-.09,.015,.095)*film.y*max(0.,.5-y))*grade.z;
+ float beatGlow=1.+.052*bands.x*(.4+.6*focus);
+ c=((c-.5)*grade.y+.5+vec3(-.09,.015,.095)*film.y*max(0.,.5-y))*grade.z*beatGlow;
  vec3 halo=(texture2D(photo,q+d*3.).rgb+texture2D(photo,q-d*3.).rgb+
             texture2D(photo,q+vec2(d.x,-d.y)*2.4).rgb+texture2D(photo,q-vec2(d.x,-d.y)*2.4).rgb)*.25;
  float bright=smoothstep(.48,.89,dot(halo,vec3(.2126,.7152,.0722)));
- float haloAmt=film.z*(1.+.55*bands.y)*(1.-clearMask*.75);
+ float haloAmt=(film.z+.08*bands.x)*(1.+.65*bands.y)*(1.-clearMask*.75);
  c+=vec3(.15,.074,.03)*bright*haloAmt;
  float weave=(sin(gl_FragCoord.x*.75)*cos(gl_FragCoord.y*.75))*.016*painterly;
  c+=weave;
@@ -99,7 +104,43 @@ void main(){
  }
  else if(weather<2.5){vec2 v=vec2(p.x*106.+p.y*10.,p.y*5.-wt*(.8+.5*loud+.7*bands.z));float drop=smoothstep(.98,1.,fract(v.x))*smoothstep(.72,1.,fract(v.y+noise(vec2(floor(v.x),0.))));c+=vec3(.14+.08*bands.z)*drop*wxMask;}
  else if(weather<3.5){float line=pow(max(0.,sin(p.y*250.+wt*2.)),18.)*max(0.,sin(p.x*9.+p.y*24.+wt*1.4));c+=vec3(.035+.03*bands.z)*line*wxMask;}
- else{float light=pow(max(0.,1.-distance(p,vec2(.8+.1*sin(wt*.2),.07))*.98),3.);c+=vec3(.05,.044,.032)*light*wxMask;}
+ else if(weather<4.5){float light=pow(max(0.,1.-distance(p,vec2(.8+.1*sin(wt*.2),.07))*.98),3.);c+=vec3(.05,.044,.032)*light*wxMask;}
+ else if(weather<5.5){
+   vec2 s1=vec2(p.x*18.+sin(wt*.5+p.y*4.)*.35,p.y*14.-wt*.35);
+   vec2 f1=fract(s1)-.5;
+   float fl1=smoothstep(.16,.02,length(f1+vec2(noise(floor(s1))-.5)*.45));
+   vec2 s2=vec2(p.x*32.-sin(wt*.4+p.y*6.)*.3,p.y*24.-wt*.52);
+   float fl2=smoothstep(.12,.02,length(fract(s2)-.5+vec2(noise(floor(s2)+9.)-.5)*.4));
+   c=mix(c,vec3(.92,.96,1.),(fl1*.38+fl2*.26)*wxMask);
+ }
+ else if(weather<6.5){
+   vec2 st=floor(p*vec2(52.,64.));
+   float rnd=noise(st);
+   float star=step(.968,rnd)*smoothstep(.35,.04,length(fract(p*vec2(52.,64.))-.5));
+   float tw=.45+.55*sin(wt*2.2+rnd*40.);
+   c=mix(c,c*vec3(.88,.92,1.06),.18*wxMask);
+   c+=vec3(.88,.93,1.)*star*tw*.72*wxMask;
+ }
+ else if(weather<7.5){
+   vec2 bg=vec2(p.x*5.5+sin(wt*.22)*.2,p.y*6.5+wt*.12);
+   vec2 cell=floor(bg), fr=fract(bg)-.5;
+   float r1=noise(cell+3.1), r2=noise(cell+11.7);
+   float orb=smoothstep(.34,.04,length(fr-vec2(r1-.5,r2-.5)*.38))*step(.46,r1);
+   c+=vec3(.24,.14,.05)*orb*(.75+.45*bands.y)*wxMask;
+ }
+ else if(weather<8.5){
+   vec2 pg=vec2(p.x*11.-wt*.28,p.y*12.-wt*.18+sin(p.x*5.+wt*.7)*.25);
+   vec2 pc=floor(pg), pf=fract(pg)-.5;
+   float rp=noise(pc+7.3);
+   float pet=smoothstep(.18,.03,length(vec2(pf.x*1.6,pf.y*.85)))*step(.64,rp);
+   c+=vec3(.16,.11,.05)*pet*wxMask;
+ }
+ else{
+   float streak=pow(max(0.,sin(p.y*52.+sin(p.x*3.+wt*.9)*2.)),20.)*max(0.,sin(p.x*4.-wt*1.4));
+   float edgeGlow=smoothstep(.35,.95,abs(p.x-.5)*2.);
+   c+=mix(vec3(.04,.22,.28),vec3(.28,.06,.18),p.x)*streak*(.55+.5*bands.y)*wxMask;
+   c+=mix(vec3(.02,.08,.11),vec3(.11,.02,.08),p.x)*edgeGlow*.32*wxMask;
+ }
  c*=(1.-.22*periph);
  c=mix(c,mix(c,original,.74),clearMask*.88);
  float dev=smoothstep(0.,1.,clamp(reveal,0.,1.));
@@ -223,6 +264,41 @@ function drawWeather(ctx, width, height, type, time, sound) {
     const mist=ctx.createLinearGradient(0,band-height*.33,0,band+height*.33);
     mist.addColorStop(0,'transparent');mist.addColorStop(.5,'rgba(221,228,222,.16)');mist.addColorStop(1,'transparent');
     ctx.fillStyle=mist;ctx.fillRect(0,0,width,height);
+  } else if(type===5) {
+    ctx.fillStyle='rgba(244,250,255,.68)';
+    for(let i=0;i<44;i++){
+      const x=((i*137.5+Math.sin(time*.7+i)*18)%width+width)%width;
+      const y=(i*83.1+time*(26+(i%5)*7))%height;
+      ctx.beginPath();ctx.arc(x,y,1.5+(i%3)*.9,0,Math.PI*2);ctx.fill();
+    }
+  } else if(type===6) {
+    for(let i=0;i<36;i++){
+      const x=(i*173.3)%width, y=(i*97.7)%(height*.82);
+      const a=.28+.62*(.5+.5*Math.sin(time*1.8+i));
+      ctx.fillStyle=`rgba(235,244,255,${a.toFixed(2)})`;
+      ctx.beginPath();ctx.arc(x,y,1+(i%3)*.55,0,Math.PI*2);ctx.fill();
+    }
+  } else if(type===7) {
+    for(let i=0;i<18;i++){
+      const x=(i*197.1+Math.sin(time*.3+i)*14)%width, y=((i*113.4-time*12)%height+height)%height;
+      const r=14+(i%4)*7;
+      const g=ctx.createRadialGradient(x,y,2,x,y,r);
+      g.addColorStop(0,'rgba(255,204,118,.28)');g.addColorStop(1,'transparent');
+      ctx.fillStyle=g;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();
+    }
+  } else if(type===8) {
+    ctx.fillStyle='rgba(232,188,128,.45)';
+    for(let i=0;i<26;i++){
+      const x=(i*161.2+time*24)%width, y=(i*89.4+time*16+Math.sin(time+i)*10)%height;
+      ctx.beginPath();ctx.ellipse(x,y,4.2,2,time+i,0,Math.PI*2);ctx.fill();
+    }
+  } else if(type===9) {
+    ctx.lineWidth=2;
+    for(let i=0;i<16;i++){
+      const x=(i*181.3+time*75)%width, y=(i*73.9)%height;
+      ctx.strokeStyle=i%2?'rgba(56,214,234,.28)':'rgba(240,86,158,.26)';
+      ctx.beginPath();ctx.moveTo(x-42,y);ctx.lineTo(x,y);ctx.stroke();
+    }
   } else {
     ctx.strokeStyle=type===2?'rgba(239,247,250,.22)':'rgba(250,247,231,.13)';
     ctx.lineWidth=1.4;ctx.beginPath();
@@ -292,7 +368,7 @@ function createPhotoGrader(recipe) {
 function cameraAt(seconds, photoIndex, energy, bass, focus, parallaxX = 0, parallaxY = 0) {
   const cycle = seconds * (.085 + energy * .02) + photoIndex * 2.1 - .6;
   return {
-    zoom: 1.03 + .016 * (1 - Math.cos(cycle)) / 2 + clamp(bass, 0, 1) * .022 * focus,
+    zoom: 1.032 + .014 * (1 - Math.cos(cycle)) / 2 + clamp(bass, 0, 1) * .052 * (.38 + .62 * focus),
     x: .012 * Math.sin(cycle) + parallaxX * .016 * (.35 + .65 * focus),
     y: .006 * Math.sin(cycle + .7) + parallaxY * .012 * (.35 + .65 * focus)
   };
@@ -307,6 +383,7 @@ function scene(canvas, day, {dayNumber, onPhoto, onProgress, onScrub, onBands, o
   let playing = !reducedMotion.matches, time = 0, weatherTime = 0, lastFrame = null, readyCount = 0;
   let activeIndex = 0, focusChangedAt = 0, nextBeatAt = Infinity;
   let revealStart = reducedMotion.matches ? -5000 : 0, lastBeatPhrase = -1;
+  let xrayTarget = 0, xrayAlpha = 0;
   const smoothBands = { bass: 0, mid: 0, high: 0, pulse: 0 };
   const media = photos.map(item => ({
     item, isVideo: isVideoItem(item), poster: null, video: null, duration: item.duration || 0
@@ -537,8 +614,8 @@ function scene(canvas, day, {dayNumber, onPhoto, onProgress, onScrub, onBands, o
     const isFocused = count > 1 && focus > .65;
     if (isFocused) {
       ctx.strokeStyle = recipe.frameHighlight || recipe.sheetInk;
-      ctx.globalAlpha = .86 * focus;
-      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = (.58 + .38 * fx.bass) * focus;
+      ctx.lineWidth = 1.2 + .95 * fx.bass;
       ctx.strokeRect(x + .75, y + .75, w - 1.5, h - 1.5);
     } else if (!softEdge) {
       ctx.strokeStyle = recipe.frameBorder || recipe.sheetRule;
@@ -585,15 +662,26 @@ function scene(canvas, day, {dayNumber, onPhoto, onProgress, onScrub, onBands, o
   function paint(completeCaption = false) {
     const audioActive = (playing || recording) && playingDay() === day.id;
     const beatTime = audioActive ? elapsedSeconds() : time / 1000;
-    const rawBeat = audioActive && recipe.bpm
-      ? Math.exp(-5.5 * ((beatTime * recipe.bpm / 60) % 1))
-      : .16 * (.5 - .5 * Math.cos(beatTime * Math.PI * .55));
-    const liveBands = audioActive ? audioBands() : { bass: rawBeat * .32 * recipe.beatReactivity, mid: rawBeat * .22, high: rawBeat * .18, level: rawBeat * .25 };
-    const targetBass = clamp(Math.max(liveBands.bass, audioActive ? rawBeat * recipe.beatReactivity * .65 : 0));
-    const targetMid = clamp(liveBands.mid);
-    const targetHigh = clamp(liveBands.high);
-    const targetPulse = clamp((audioActive ? Math.max(rawBeat, liveBands.level) : rawBeat) * recipe.beatReactivity);
-    const bandLerp = recording ? 1 : .2;
+    const bpm = recipe.bpm || 82;
+    const beatPhase = (beatTime * bpm / 60) % 1;
+    // Silky C1-continuous inhale/exhale breath locked to exact BPM (zero sawtooth jitter)
+    const beatBreath = Math.pow(.5 - .5 * Math.cos(beatPhase * Math.PI * 2), 1.55);
+    const halfBreath = .5 - .5 * Math.cos(beatPhase * Math.PI);
+    const liveBands = audioActive ? audioBands() : null;
+    const react = .55 + .45 * clamp(recipe.beatReactivity || .45);
+    const targetBass = clamp(liveBands
+      ? Math.max(liveBands.bass * 1.15, beatBreath * react * .85)
+      : beatBreath * react * .78);
+    const targetMid = clamp(liveBands
+      ? Math.max(liveBands.mid, halfBreath * .52)
+      : halfBreath * .48);
+    const targetHigh = clamp(liveBands
+      ? Math.max(liveBands.high, beatBreath * .38)
+      : beatBreath * .34);
+    const targetPulse = clamp(liveBands
+      ? Math.max(liveBands.level, beatBreath * react)
+      : beatBreath * react * .82);
+    const bandLerp = recording ? 1 : .28;
     smoothBands.bass += (targetBass - smoothBands.bass) * bandLerp;
     smoothBands.mid += (targetMid - smoothBands.mid) * bandLerp;
     smoothBands.high += (targetHigh - smoothBands.high) * bandLerp;
@@ -708,6 +796,190 @@ function scene(canvas, day, {dayNumber, onPhoto, onProgress, onScrub, onBands, o
     ctx.textAlign = 'right';
     ctx.fillText(trackMeta, W - layout.pad, metaY, layout.footer.w * .36);
     ctx.restore();
+
+    // 7. Live Signal Blueprint Overlay («Рентген-слой»): reveals CV focus, K-Means pins, recipe & audio telemetry.
+    const targetX = (completeCaption || recording) ? 0 : xrayTarget;
+    xrayAlpha = (completeCaption || recording) ? 0 : (xrayAlpha + (targetX - xrayAlpha) * .22);
+    if (xrayAlpha > .012) {
+      drawSignalBlueprint(ctx, W, H, layout, recipe, day, activeIndex, fx, xrayAlpha, beatTime);
+    }
+  }
+
+  function drawSignalBlueprint(ctx, W, H, layout, recipe, day, activeIdx, fx, alpha, beatTime) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    const amber = '#F5C469';
+    const coral = '#FF6247';
+    const cream = '#F6F0E4';
+
+    // Subtle dark architectural drafting veil so blueprint graphics stay razor-sharp
+    ctx.fillStyle = 'rgba(13, 12, 10, 0.44)';
+    ctx.fillRect(0, layout.stage.y, W, layout.stage.h);
+
+    // 8x10 drafting grid inside stage
+    ctx.strokeStyle = 'rgba(246, 240, 228, 0.10)';
+    ctx.lineWidth = 1;
+    const cols = 8, rows = 8;
+    ctx.beginPath();
+    for (let c = 1; c < cols; c++) {
+      const gx = Math.round((W / cols) * c) + .5;
+      ctx.moveTo(gx, layout.stage.y); ctx.lineTo(gx, layout.stage.y + layout.stage.h);
+    }
+    for (let r = 1; r < rows; r++) {
+      const gy = Math.round(layout.stage.y + (layout.stage.h / rows) * r) + .5;
+      ctx.moveTo(0, gy); ctx.lineTo(W, gy);
+    }
+    ctx.stroke();
+
+    // Real CV Focus Reticle (findFocus / frameComposition) on every visible slot
+    for (const slot of layout.slots) {
+      const item = day.photos[slot.index] || day.photos[0];
+      const anchor = frameComposition(item, day.mood, slot.w / Math.max(1, slot.h));
+      const fxX = slot.x + anchor.x * slot.w;
+      const fxY = slot.y + anchor.y * slot.h;
+      const isAct = slot.index === activeIdx;
+
+      // Dashed bounding box + slot dimensions
+      ctx.save();
+      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = isAct ? coral : 'rgba(245, 196, 105, 0.55)';
+      ctx.lineWidth = isAct ? 1.6 : 1;
+      ctx.strokeRect(slot.x + 1, slot.y + 1, slot.w - 2, slot.h - 2);
+
+      // Rule-of-thirds crosshairs passing through computed focal point
+      ctx.strokeStyle = isAct ? 'rgba(255, 98, 71, 0.42)' : 'rgba(245, 196, 105, 0.22)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(slot.x, fxY); ctx.lineTo(slot.x + slot.w, fxY);
+      ctx.moveTo(fxX, slot.y); ctx.lineTo(fxX, slot.y + slot.h);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Rangefinder target reticle at exact focus coordinate
+      const rad = isAct ? 22 + fx.bass * 9 : 14;
+      ctx.strokeStyle = isAct ? coral : amber;
+      ctx.lineWidth = isAct ? 1.8 : 1.2;
+      ctx.beginPath();
+      ctx.arc(fxX, fxY, rad, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(fxX, fxY, 3.5, 0, Math.PI * 2);
+      ctx.fillStyle = isAct ? coral : amber;
+      ctx.fill();
+
+      // Technical reticle tag
+      const tag = `CV FOCUS ${Math.round(anchor.x * 100)}%,${Math.round(anchor.y * 100)}% · ${slot.w}×${slot.h}`;
+      ctx.font = '600 11px Consolas, monospace';
+      const tw = ctx.measureText(tag).width + 12;
+      const tx = clamp(fxX + 16, slot.x + 6, slot.x + slot.w - tw - 6);
+      const ty = clamp(fxY - 26, slot.y + 28, slot.y + slot.h - 24);
+      ctx.fillStyle = 'rgba(14, 13, 11, 0.86)';
+      ctx.fillRect(tx, ty, tw, 18);
+      ctx.strokeStyle = isAct ? coral : amber;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(tx + .5, ty + .5, tw - 1, 17);
+      ctx.fillStyle = cream;
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      ctx.fillText(tag, tx + 6, ty + 9.5);
+      ctx.restore();
+    }
+
+    // K-Means Palette Extraction Callout Strip (bottom-left of stage)
+    const pal = (recipe.palette || []).slice(0, 5);
+    const px0 = layout.pad + 10;
+    const py0 = layout.stage.y + layout.stage.h - 118;
+    const boxW = 310, boxH = 104;
+    ctx.fillStyle = 'rgba(14, 13, 11, 0.86)';
+    ctx.fillRect(px0, py0, boxW, boxH);
+    ctx.strokeStyle = 'rgba(245, 196, 105, 0.45)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(px0 + .5, py0 + .5, boxW - 1, boxH - 1);
+
+    ctx.fillStyle = amber;
+    ctx.font = '700 11px Consolas, monospace';
+    ctx.textBaseline = 'top';
+    ctx.textAlign = 'left';
+    ctx.fillText('K-MEANS PALETTE & RECIPE TELEMETRY', px0 + 10, py0 + 9);
+
+    pal.forEach((col, i) => {
+      const sx = px0 + 10 + i * 58;
+      const sy = py0 + 28;
+      ctx.fillStyle = col;
+      ctx.fillRect(sx, sy, 52, 16);
+      ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+      ctx.strokeRect(sx + .5, sy + .5, 51, 15);
+      ctx.fillStyle = cream;
+      ctx.font = '600 9.5px Consolas, monospace';
+      ctx.fillText(col.toUpperCase(), sx + 2, sy + 20);
+    });
+
+    const statsLine = `MODE ${String(recipe.signatureStyle || 'monet').toUpperCase()} · BRUSH ${recipe.brushRadius.toFixed(1)}px · SPACE ${Math.round(recipe.whitespace * 100)}%`;
+    const statsLine2 = `SAT ${Math.round(recipe.saturation * 100)}% · CON ${Math.round(recipe.contrast * 100)}% · MIST ${Math.round(recipe.mist * 100)}%` +
+      (Number.isFinite(recipe.videoMotion) ? ` · VID ${Math.round(recipe.videoMotion * 100)}%` : '');
+    ctx.fillStyle = 'rgba(246, 240, 228, 0.85)';
+    ctx.font = '500 10.5px Consolas, monospace';
+    ctx.fillText(statsLine, px0 + 10, py0 + 64, boxW - 20);
+    ctx.fillText(statsLine2, px0 + 10, py0 + 81, boxW - 20);
+
+    // Live 3-Band Audio Spectrum + BPM Beat Phase Clock (bottom-right of stage)
+    const axW = 248, axH = 104;
+    const ax0 = W - layout.pad - axW - 10;
+    const ay0 = py0;
+    ctx.fillStyle = 'rgba(14, 13, 11, 0.86)';
+    ctx.fillRect(ax0, ay0, axW, axH);
+    ctx.strokeStyle = 'rgba(255, 98, 71, 0.5)';
+    ctx.strokeRect(ax0 + .5, ay0 + .5, axW - 1, axH - 1);
+
+    ctx.fillStyle = coral;
+    ctx.font = '700 11px Consolas, monospace';
+    ctx.fillText(`LIVE SIGNAL · ${recipe.bpm ? Math.round(recipe.bpm) + ' BPM' : 'FREE TEMPO'}`, ax0 + 10, ay0 + 9);
+
+    const bands = [
+      ['BASS', fx.bass, coral],
+      ['MID ', fx.mid, amber],
+      ['HIGH', fx.high, '#8FD6C2']
+    ];
+    bands.forEach(([label, val, col], idx) => {
+      const by = ay0 + 32 + idx * 21;
+      ctx.fillStyle = cream;
+      ctx.font = '600 10.5px Consolas, monospace';
+      ctx.fillText(label, ax0 + 10, by);
+      const bx = ax0 + 48, bw = 114, bh = 10;
+      ctx.fillStyle = 'rgba(255,255,255,0.12)';
+      ctx.fillRect(bx, by + 1, bw, bh);
+      ctx.fillStyle = col;
+      ctx.fillRect(bx, by + 1, Math.round(bw * clamp(val, 0.04, 1)), bh);
+    });
+
+    // Rotating Beat Phase Dial
+    const clkX = ax0 + axW - 36, clkY = ay0 + 60, clkR = 22;
+    const phase = recipe.bpm ? ((beatTime * recipe.bpm / 60) % 1) : ((beatTime * 0.5) % 1);
+    ctx.strokeStyle = 'rgba(246, 240, 228, 0.28)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(clkX, clkY, clkR, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = coral;
+    ctx.lineWidth = 2.4;
+    ctx.beginPath();
+    ctx.arc(clkX, clkY, clkR, -Math.PI / 2, -Math.PI / 2 + phase * Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = cream;
+    ctx.font = '700 10px Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('BEAT', clkX, clkY);
+
+    // Dashed highlight bracket around Sound Signature box
+    const sb = layout.sigBox;
+    ctx.save();
+    ctx.setLineDash([4, 3]);
+    ctx.strokeStyle = amber;
+    ctx.lineWidth = 1.3;
+    ctx.strokeRect(sb.x - 3, sb.y - 3, sb.w + 6, sb.h + 6);
+    ctx.setLineDash([]);
+    ctx.restore();
+
+    ctx.restore();
   }
 
   function loadAll() {
@@ -815,7 +1087,12 @@ function scene(canvas, day, {dayNumber, onPhoto, onProgress, onScrub, onBands, o
   return {
     get ready() { return readyCount > 0; },
     get playing() { return playing; },
+    get xray() { return xrayTarget > .5; },
     loaded,
+    setXray(on) {
+      xrayTarget = on ? 1 : 0;
+      if (!playing) { xrayAlpha = xrayTarget; paint(); }
+    },
     setPlaying(on) {
       playing = on; lastFrame = null; syncVideos();
       if (!on) paint();
@@ -1111,7 +1388,7 @@ export async function renderDay(root, savedDay, {readOnly=false, back='/', days=
   const twoColStory = String(day.text || '').trim().length >= 130;
   root.innerHTML=`<article class="dt-page"><div data-weather-layer aria-hidden="true"></div>
   <div class="dt-day-nav">${back?`<button class="dt-back" type="button" data-act="back">${icon('arrow-left',16)} ${readOnly && back==='/'?'На главную':'К ящику'}</button>`:''}
-  <div class="dt-day-actions"><button class="button secondary" type="button" data-act="xray">Почему так?</button>${readOnly?'':`<button class="button secondary" type="button" data-act="share">Поделиться</button><a class="button primary" href="/api/days/${encodeURIComponent(day.id)}/zip" download>Скачать ZIP</a>`}</div></div>
+  <div class="dt-day-actions"><button class="button secondary" type="button" data-act="xray">Почему так?</button>${readOnly?'':`<button class="button secondary" type="button" data-act="share">Поделиться</button><a class="button primary" href="/api/days/${encodeURIComponent(day.id)}/zip" download>Скачать ZIP</a><button class="button secondary dt-delete-btn" type="button" data-act="delete" title="Удалить эту запись из архива">Удалить</button>`}</div></div>
 
   <div class="dt-gatefold">
     <section class="dt-gatefold-left dt-art-column" style="--fade:${initialFade};--vinyl-spin:${spinDur()}" aria-label="Лицевая обложка пластинки дня">
@@ -1123,6 +1400,7 @@ export async function renderDay(root, savedDay, {readOnly=false, back='/', days=
       </div>
       <div class="dt-under-stage">
         <div class="dt-stage-tools">
+          <button class="dt-text-action dt-xray-toggle" type="button" data-act="signal-xray" aria-pressed="false" title="Показать живой рентген-слой алгоритма (или удерживайте Space)">${icon('scan',14)} Рентген</button>
           <button class="dt-text-action" type="button" data-act="loupe">${icon('zoom-in',15)} Лупа</button>
           <button class="dt-text-action" type="button" data-act="reveal" title="Повторить проявку памяти">${icon('refresh-cw',14)} Проявить</button>
           ${readOnly?'':`<button class="dt-text-action" type="button" data-act="png">${icon('image',14)} PNG</button><button class="dt-text-action" type="button" data-act="clip">${icon('film',14)} <span>${clipLabel()}</span></button>`}
@@ -1230,6 +1508,24 @@ export async function renderDay(root, savedDay, {readOnly=false, back='/', days=
     motionButton.setAttribute('aria-label',playing?'Поставить анимацию на паузу':'Воспроизвести анимацию');
   }
   function setMotion(playing){art.setPlaying(playing);motionState();}
+  let xrayLocked = false, xrayHeld = false;
+  function syncXray(){
+    const on = xrayLocked || xrayHeld;
+    art.setXray(on);
+    const btn = find('[data-act=signal-xray]');
+    if (btn) btn.setAttribute('aria-pressed', String(on));
+  }
+  document.addEventListener('keydown', e => {
+    if (!live || document.body.classList.contains('modal-open')) return;
+    if (/INPUT|TEXTAREA|SELECT|BUTTON|A/.test(document.activeElement?.tagName || '')) return;
+    if (e.code === 'Space' && !e.repeat) { e.preventDefault(); xrayHeld = true; syncXray(); }
+    else if ((e.key === 'x' || e.key === 'X' || e.key === 'ч' || e.key === 'Ч') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      xrayLocked = !xrayLocked; syncXray();
+    }
+  }, { signal: signals.signal });
+  document.addEventListener('keyup', e => {
+    if (e.code === 'Space' && xrayHeld) { xrayHeld = false; syncXray(); }
+  }, { signal: signals.signal });
   motionState();
   reduce.addEventListener('change',event=>{
     if(event.matches)colorReveal.forEach(animation=>animation.cancel());
@@ -1594,7 +1890,34 @@ export async function renderDay(root, savedDay, {readOnly=false, back='/', days=
       switch(button.dataset.act){
         case 'back':navigate(back);break;
         case 'share':if(!readOnly)await shareDialog(day.id);break;
+        case 'delete':
+          if(readOnly)break;
+          {
+            const body = modal('Удалить запись?',
+              `<p class="dialog-lead">Запись <strong>«${esc(day.title)}»</strong> (${esc(dateLabel(day.date))}), её фотографии, видео и аудио будут удалены из личного архива без возможности восстановления.</p>` +
+              `<div class="dt-confirm-actions"><button type="button" class="button secondary" data-cancel-delete>Отмена</button><button type="button" class="button primary" data-confirm-delete>Удалить навсегда</button></div>`);
+            body.querySelector('[data-cancel-delete]').onclick = closeModal;
+            const confirmBtn = body.querySelector('[data-confirm-delete]');
+            confirmBtn.onclick = async () => {
+              confirmBtn.disabled = true;
+              confirmBtn.textContent = 'Удаляем…';
+              try {
+                await api(`/api/days/${encodeURIComponent(day.id)}`, { method: 'DELETE' });
+                closeModal();
+                stopVoice();
+                stopTrack();
+                toast('Запись удалена.');
+                navigate(back || '/');
+              } catch (err) {
+                confirmBtn.disabled = false;
+                confirmBtn.textContent = 'Удалить навсегда';
+                toast(err.message || 'Не удалось удалить запись.');
+              }
+            };
+          }
+          break;
         case 'xray':xray(day,recipe);break;
+        case 'signal-xray':xrayLocked=!xrayLocked;syncXray();break;
         case 'weather':weather.destroy();weather=mountDayWeather(weatherHost,day,recipe);break;
         case 'reveal':await startRevealRitual({ forceReplay: true });break;
         case 'motion':setMotion(!art.playing);break;

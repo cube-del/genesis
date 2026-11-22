@@ -184,3 +184,27 @@ test('contact sheet mat and photo frame match the day color grade instead of sta
   assert.ok(eb >= er, `after-exam frameBorder should lean cool (${exam.frameBorder})`);
   assert.ok(fr > fb, `last-apartment frameBorder should lean warm (${flat.frameBorder})`);
 });
+
+test('all 10 atmospheric scenarios map cleanly and shape distinct optical grading', () => {
+  const newScenarios = [
+    ['snow_drift', 'Снег и тишина'],
+    ['starlight', 'Звёздная ночь'],
+    ['amber_bokeh', 'Огни и боке'],
+    ['petal_drift', 'Листья и ветер'],
+    ['neon_pulse', 'Огни мегаполиса']
+  ];
+  for (const [code, label] of newScenarios) {
+    const r = recipe({ weatherType: code, text: 'Обычный день в городе.' });
+    assert.equal(r.weatherType, code);
+    assert.equal(r.weatherLabel, label);
+    const fromLabel = buildVisualRecipe({ weather: label, track: { kind: 'link', bpm: null } });
+    assert.equal(fromLabel.weatherType, code);
+  }
+  const clear = recipe({ weatherType: 'clear_light', text: 'Обычный день в городе.' });
+  const neon = recipe({ weatherType: 'neon_pulse', text: 'Обычный день в городе.' });
+  const bokeh = recipe({ weatherType: 'amber_bokeh', text: 'Обычный день в городе.' });
+  const snow = recipe({ weatherType: 'snow_drift', text: 'Обычный день в городе.' });
+  assert.ok(neon.saturation > clear.saturation && neon.geometry > clear.geometry);
+  assert.ok(bokeh.amberShift > clear.amberShift && bokeh.halation > clear.halation);
+  assert.ok(snow.exposure > clear.exposure && snow.mist > clear.mist);
+});

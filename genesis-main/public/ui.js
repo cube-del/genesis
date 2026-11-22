@@ -53,7 +53,9 @@ const shapes = {
   link:'<path d="m10 13 4-4m-5 6-2 2a3.5 3.5 0 0 1-5-5l5-5a3.5 3.5 0 0 1 5 0m0 10a3.5 3.5 0 0 0 5 0l5-5a3.5 3.5 0 0 0-5-5l-2 2"/>',
   lock:'<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
   calendar:'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4m10-4v4M3 10h18"/>',
-  heart:'<path d="M12 21 3.5 12.2A5 5 0 0 1 12 5a5 5 0 0 1 8.5 7.2z"/>'
+  heart:'<path d="M12 21 3.5 12.2A5 5 0 0 1 12 5a5 5 0 0 1 8.5 7.2z"/>',
+  disc:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.6"/><path d="M6.6 8.2a6.4 6.4 0 0 1 3.2-2.2M17.4 15.8a6.4 6.4 0 0 1-3.2 2.2"/>',
+  route:'<circle cx="5.5" cy="17.5" r="2.5"/><circle cx="18.5" cy="6.5" r="2.5"/><path d="M8 17.5h4.5a3 3 0 0 0 0-6h-1a3 3 0 0 1 0-6H16"/>'
 };
 const aliases = {clock:'time', close:'x', 'volume':'volume-2',shuffle:'refresh-cw',sparkle:'sparkles',camera:'image','upload-cloud':'upload','cloud-upload':'upload', photo:'image', 'music-2':'music', loader:'refresh-cw', 'circle-check':'check', 'list-music':'music', 'message-circle':'file-text', 'mic':'volume-2', 'headphone':'headphones', 'trash-2':'x'};
 export function icon(name,size=20) {

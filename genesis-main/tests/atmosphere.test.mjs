@@ -159,3 +159,37 @@ test('локальный анализ учитывает область отри
   assert.ok(day.title.split(/\s+/u).length <= 7);
   assert.ok(hospital.includes(day.quote));
 });
+
+test('cross-modal fusion maps 10 rich scenarios from text, negation and photo visual cues', () => {
+  const analyze = (text, light) => analyzeRuleAtmosphere({
+    ...input,
+    text,
+    photos: [{ ...smallPhoto(jpegA), ...(light ? { light } : {}) }]
+  });
+  // Text-driven new scenarios with negation respect
+  assert.equal(analyze('Пошёл густой снег, город затих в сугробах.').weatherType, 'snow_drift');
+  assert.notEqual(analyze('Снега не было, мы просто сидели дома.').weatherType, 'snow_drift');
+  assert.equal(analyze('Вышли на балкон смотреть на звёзды и луну.').weatherType, 'starlight');
+  assert.equal(analyze('Зажгли свечи и тёплые гирлянды на кухне.').weatherType, 'amber_bokeh');
+  assert.equal(analyze('Шли по осенней аллее под листопадом.').weatherType, 'petal_drift');
+  assert.equal(analyze('Мчались по ночной трассе мимо неоновых витрин!').weatherType, 'neon_pulse');
+
+  // Visual-only scene & mood steering when text is neutral/descriptive
+  const neutral = 'Просто снял кадр по дороге.';
+  const coolNight = analyze(neutral, { luma: .18, contrast: .19, warmth: .36, chroma: .16, darkShare: .68, brightShare: .02, dominantHue: 222 });
+  assert.equal(coolNight.mood, 'dream');
+  assert.equal(coolNight.weatherType, 'starlight');
+
+  const warmLantern = analyze(neutral, { luma: .22, contrast: .25, warmth: .64, chroma: .34, darkShare: .60, brightShare: .04, dominantHue: 34 });
+  assert.equal(warmLantern.weatherType, 'amber_bokeh');
+
+  const brightFrost = analyze(neutral, { luma: .78, contrast: .14, warmth: .39, chroma: .11, darkShare: .03, brightShare: .58 });
+  assert.equal(brightFrost.weatherType, 'snow_drift');
+
+  const neonNight = analyze(neutral, { luma: .20, contrast: .32, warmth: .42, chroma: .44, darkShare: .64, brightShare: .05, dominantHue: 305 });
+  assert.equal(neonNight.mood, 'energy');
+  assert.equal(neonNight.weatherType, 'neon_pulse');
+
+  const lushForest = analyze(neutral, { luma: .52, contrast: .18, warmth: .50, chroma: .42, darkShare: .08, brightShare: .08, dominantHue: 118 });
+  assert.equal(lushForest.weatherType, 'petal_drift');
+});

@@ -20,7 +20,12 @@ const clues = {
   strained: /^(тревог|тревож|паник|нерв|напряж|сроч|дедлайн|спеш|опозд|правк|стресс|испуг|боял|страш|rush|stress|anxio|panic|deadline)/u,
   memory: /^(ностальг|вспомин|вспом|памят|помню|детств|прощ|расстав|последн|ностальжи|nostalg|remember|childhood|farewell)/u,
   joyful: /^(радост|счаст|улыб|ликов|смеял|весел|happy|joy|smile)/u,
-  rain: /^(дожд|ливн|ливен|морос|луж|rain|drizzl)/u
+  rain: /^(дожд|ливн|ливен|морос|луж|rain|drizzl)/u,
+  snow: /^(снег|снеж|сугроб|метел|мороз|иней|зима|зимн|snow|frost|winter)/u,
+  stars: /^(звезд|созвезд|космос|луна|лунн|полнолун|млечн|star|moon|cosmos)/u,
+  neon: /^(неон|вывеск|витрин|фары|трасс|мегаполис|клуб|лазер|neon|citylight)/u,
+  bokeh: /^(свеч|гирлянд|фонар|костер|костр|камин|огоньк|огонек|candle|lantern|bokeh)/u,
+  petals: /^(лист|листопад|лепест|цветен|сакур|алле|клен|берез|leaf|petal|blossom|autumn)/u
 };
 
 export function analyzeTextStructure(value = '') {
@@ -77,13 +82,20 @@ export function gradeColor(color, recipe) {
 
 const skies = {
   mist: 'Туман', warm_haze: 'Тёплая дымка', clear_light: 'Ясный свет',
-  rain_glass: 'Дождь на стекле', wind_sparks: 'Ветер и искры'
+  rain_glass: 'Дождь на стекле', wind_sparks: 'Ветер и искры',
+  snow_drift: 'Снег и тишина', starlight: 'Звёздная ночь',
+  amber_bokeh: 'Огни и боке', petal_drift: 'Листья и ветер', neon_pulse: 'Огни мегаполиса'
 };
 function storedSky(day) {
   const code = day.weatherType || day.weather?.effect_type;
   if (Object.hasOwn(skies, code)) return code;
   const label = String(day.weather?.label || day.weather || '').toLowerCase();
   if (/дожд|ливень|rain/u.test(label)) return 'rain_glass';
+  if (/снег|мороз|зима|snow/u.test(label)) return 'snow_drift';
+  if (/зв[её]зд|лун|космос|star/u.test(label)) return 'starlight';
+  if (/неон|мегаполис|витрин|neon/u.test(label)) return 'neon_pulse';
+  if (/боке|огни|фонар|свеч|bokeh/u.test(label)) return 'amber_bokeh';
+  if (/лист|лепест|petal/u.test(label)) return 'petal_drift';
   if (/ветер|искр|wind/u.test(label)) return 'wind_sparks';
   if (/туман|mist|fog/u.test(label)) return 'mist';
   if (/дымк|т[её]пл|haze/u.test(label)) return 'warm_haze';
@@ -104,7 +116,9 @@ export function buildVisualRecipe(day = {}) {
   const minor = track.mode === 'minor' ? unit(track.modeConfidence, 1) : 0;
   const bpm = Number.isFinite(track.bpm) && track.bpm >= minManualBpm && track.bpm <= maxManualBpm ? track.bpm : null;
   const pace = bpm === null ? 1 : clamp(bpm / 90, .35, 1.9);
-  const brightQuiet = clamp((photo.luma - .5) / .22) * text.weary * (1 - text.rain);
+  const explicitScene = Math.max(text.rain, text.snow, text.stars, text.neon);
+  const brightQuiet = clamp((photo.luma - .5) / .22) * text.weary * (1 - explicitScene);
+  const resolvedSky = brightQuiet >= .36 ? 'warm_haze' : storedSky(day);
   const hasVideoMotion = Number.isFinite(day.videoMotion);
   const videoMotion = hasVideoMotion ? clamp(day.videoMotion) : null;
   const motionShift = hasVideoMotion ? (videoMotion - .35) : 0;
@@ -113,25 +127,30 @@ export function buildVisualRecipe(day = {}) {
   const cutSharpness = clamp(.65 * (1 - text.sentenceFlow) + .35 * percussion + .16 * motionShift);
   const whitespace = clamp(.025 + .31 * (1 - text.socialDensity) + .11 * minor +
     .06 * (1 - dayEnergy) + .10 * brightQuiet - .035 * tension - .12 * motionShift, .045, .45);
+  const skyAmber = resolvedSky === 'amber_bokeh' ? 3.2 : 0;
+  const skyCool = resolvedSky === 'starlight' ? .26 : resolvedSky === 'snow_drift' ? .16 : resolvedSky === 'neon_pulse' ? .18 : 0;
+  const skyHalation = resolvedSky === 'amber_bokeh' ? .28 : resolvedSky === 'neon_pulse' ? .22 : 0;
+  const skyMist = resolvedSky === 'snow_drift' ? .14 : 0;
+  const skyGeo = resolvedSky === 'neon_pulse' ? .14 : 0;
   const recipe = {
     basePalette, textSignals: text, bpm, intervalMs: photoInterval(track), cutSharpness, whitespace,
     videoMotion,
     saturation: clamp(.73 + .19 * dayEnergy + .13 * energy + .13 * text.joyful -
-      .12 * minor - .15 * text.weary - .085 * brightQuiet, .51, 1.23),
-    contrast: clamp(.85 + .2 * cutSharpness + .17 * tension + .1 * photo.contrast - .1 * brightQuiet + .12 * motionShift, .78, 1.32),
-    exposure: 1 + .105 * brightQuiet + .022 * nostalgia,
-    amberShift: 8 * nostalgia, shadowCool: tension * (.4 + .6 * photo.contrast),
-    halation: clamp(.8 * nostalgia + .24 * brightQuiet),
-    mist: clamp(.04 + .58 * text.reflectiveness + .24 * brightQuiet - .12 * tension - .14 * Math.max(0, motionShift)),
+      .12 * minor - .15 * text.weary - .085 * brightQuiet + (resolvedSky === 'neon_pulse' ? .10 : resolvedSky === 'snow_drift' ? -.08 : 0), .51, 1.23),
+    contrast: clamp(.85 + .2 * cutSharpness + .17 * tension + .1 * photo.contrast - .1 * brightQuiet + .12 * motionShift + (resolvedSky === 'neon_pulse' ? .08 : 0), .78, 1.32),
+    exposure: 1 + .105 * brightQuiet + .022 * nostalgia + (resolvedSky === 'snow_drift' ? .035 : 0),
+    amberShift: Math.min(8, 8 * nostalgia + skyAmber), shadowCool: clamp(tension * (.4 + .6 * photo.contrast) + skyCool),
+    halation: clamp(.8 * nostalgia + .24 * brightQuiet + skyHalation),
+    mist: clamp(.04 + .58 * text.reflectiveness + .24 * brightQuiet - .12 * tension - .14 * Math.max(0, motionShift) + skyMist),
     brushRadius: 1 + 2.7 * (1 - brightness) + 2 * text.reflectiveness,
     grain: clamp(.10 + .64 * (1 - brightness) + .17 * nostalgia),
     geometry: clamp(.06 + .33 * percussion + .26 * tension + .23 * (1 - text.sentenceFlow) +
-      .18 * text.socialDensity + .15 * brightness * tension + .22 * motionShift),
+      .18 * text.socialDensity + .15 * brightness * tension + .22 * motionShift + skyGeo),
     beatReactivity: percussion * .85,
     motionSpeed: clamp(pace * (.8 + .44 * (1 - text.sentenceFlow)) * (1 - .42 * brightQuiet) * (1 + .25 * motionShift), .22, 1.8),
     particleSpeed: clamp(pace * (.89 + .17 * energy) * (1 + .22 * motionShift), .31, 1.85),
     typeWeight: Math.round(420 + 110 * (1 - text.sentenceFlow) + 110 * tension + 30 * text.socialDensity),
-    weatherType: brightQuiet >= .36 ? 'warm_haze' : storedSky(day)
+    weatherType: resolvedSky
   };
   const voiceRate = clamp(.88 + .12 * dayEnergy + .06 * (1 - text.sentenceFlow) + .06 * tension -
     .05 * text.reflectiveness - .03 * minor, .84, 1.12);
