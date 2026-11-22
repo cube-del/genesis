@@ -51,6 +51,41 @@
     radial-gradient(ellipse at 76% 0%, #fff0c666, transparent 73%);
 }
 
+.dt-day-weather[data-sky="snow_drift"]::before {
+  background:
+    radial-gradient(ellipse at 18% 12%, #e4f0f852, transparent 68%),
+    radial-gradient(ellipse at 82% 84%, #c7dceb3b, transparent 62%),
+    linear-gradient(150deg, #cfe0ec24, #edf4f912 52%, #b9cde026);
+}
+
+.dt-day-weather[data-sky="starlight"]::before {
+  background:
+    radial-gradient(ellipse at 25% 15%, #2b447855, transparent 65%),
+    radial-gradient(ellipse at 78% 72%, #3a2d6644, transparent 62%),
+    linear-gradient(180deg, #0d162c44, #141c321a 55%, #0a0f1d3a);
+}
+
+.dt-day-weather[data-sky="amber_bokeh"]::before {
+  background:
+    radial-gradient(ellipse at 14% 76%, #f8a95652, transparent 66%),
+    radial-gradient(ellipse at 84% 24%, #ffcf7d46, transparent 64%),
+    linear-gradient(135deg, #c7763420, #f4ba6a12 50%, #9b522228);
+}
+
+.dt-day-weather[data-sky="petal_drift"]::before {
+  background:
+    radial-gradient(ellipse at 12% 24%, #e9bf9342, transparent 66%),
+    radial-gradient(ellipse at 88% 76%, #a8c0953c, transparent 64%),
+    linear-gradient(140deg, #d7b28a1c, #f0dfc410 50%, #99b28a22);
+}
+
+.dt-day-weather[data-sky="neon_pulse"]::before {
+  background:
+    radial-gradient(ellipse at 12% 30%, #24c6dc38, transparent 62%),
+    radial-gradient(ellipse at 88% 68%, #e2468a36, transparent 62%),
+    linear-gradient(125deg, #1b7ea624, #14121d12 50%, #b8327628);
+}
+
 @media print, (forced-colors: active) {
   .dt-day-weather { display: none; }
 }

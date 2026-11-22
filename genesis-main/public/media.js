@@ -1,6 +1,7 @@
-let context, analyser, memoryFilter, master, streamOutput, spectrum;
+let context, analyser, memoryFilter, ageFilter, crackleGain, crackleSource, master, streamOutput, spectrum;
 let active = null;
 let duck = false;
+let vinylAging = 0;
 let smoothBands = { bass: 0, mid: 0, high: 0, level: 0 };
 
 export function spotifyLinks(track) {
@@ -35,16 +36,67 @@ function audioGraph() {
   memoryFilter.type = 'lowpass';
   memoryFilter.frequency.value = 20000;
   memoryFilter.Q.value = 0.7;
+  ageFilter = context.createBiquadFilter();
+  ageFilter.type = 'lowpass';
+  ageFilter.frequency.value = agingCutoff(vinylAging);
+  ageFilter.Q.value = 0.65;
   master = context.createGain();
   master.gain.value = duck ? 0.2 : 0.82;
   analyser.connect(memoryFilter);
-  memoryFilter.connect(master);
+  memoryFilter.connect(ageFilter);
+  ageFilter.connect(master);
   master.connect(context.destination);
+
+  // Delicate generative vinyl dust crackle buffer (silent at vinylAging = 0, warm crackle as shelf patina increases)
+  const bufLen = Math.floor(context.sampleRate * 3.5);
+  const dustBuf = context.createBuffer(1, bufLen, context.sampleRate);
+  const ch = dustBuf.getChannelData(0);
+  let seed = 42071;
+  for (let i = 0; i < bufLen; i++) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    const r = seed / 0xffffffff;
+    const pop = r > 0.9986 ? (r - 0.9986) * 420 * (i % 2 ? 1 : -1) : 0;
+    const hiss = (r - 0.5) * 0.032;
+    ch[i] = Math.max(-0.8, Math.min(0.8, pop + hiss));
+  }
+  const dustHP = context.createBiquadFilter();
+  dustHP.type = 'bandpass';
+  dustHP.frequency.value = 2600;
+  dustHP.Q.value = 0.7;
+  crackleGain = context.createGain();
+  crackleGain.gain.value = 0;
+  crackleSource = context.createBufferSource();
+  crackleSource.buffer = dustBuf;
+  crackleSource.loop = true;
+  crackleSource.connect(dustHP);
+  dustHP.connect(crackleGain);
+  crackleGain.connect(master);
+  crackleSource.start();
+
   if (context.createMediaStreamDestination) {
     streamOutput = context.createMediaStreamDestination();
     master.connect(streamOutput);
   }
   return context;
+}
+
+function agingCutoff(amount) {
+  const a = Math.max(0, Math.min(1, Number(amount) || 0));
+  return 20000 * Math.pow(3600 / 20000, a);
+}
+
+function syncCrackleGain() {
+  if (!context || !crackleGain) return;
+  const target = active?.started && vinylAging > 0.06 ? vinylAging * 0.085 : 0;
+  crackleGain.gain.setTargetAtTime(target, context.currentTime, 0.08);
+}
+
+export function setVinylAging(amount) {
+  vinylAging = Math.max(0, Math.min(1, Number(amount) || 0));
+  if (context && ageFilter) {
+    ageFilter.frequency.setTargetAtTime(agingCutoff(vinylAging), context.currentTime, 0.08);
+  }
+  syncCrackleGain();
 }
 
 // Acoustic "from past to present" ritual: low-pass sweeps 350 Hz -> 20 kHz over 1.8 s.
@@ -118,6 +170,7 @@ export function stopTrack() {
     if (node.stop) { try { node.stop(); } catch {} }
     node.disconnect();
   }
+  syncCrackleGain();
   previous.end?.();
 }
 
@@ -237,6 +290,7 @@ export async function playTrack(day, onEnd, { reveal = false, offsetSeconds = 0 
     }
     if (active !== state) return false;
     state.started = true;
+    syncCrackleGain();
     const remainingMs = Math.max(200, (state.duration - (state.element ? state.element.currentTime : offsetSeconds)) * 1000 + 40);
     state.timeout = setTimeout(() => { if (active === state) stopTrack(); }, remainingMs);
     return true;

@@ -19,15 +19,42 @@ function photoSamples(img) {
 
 export function photoLight(samples) {
   const count = samples.length || 1;
-  let light = 0, lightSquared = 0, tint = 0;
+  let light = 0, lightSquared = 0, tint = 0, chromaSum = 0, darkCount = 0, brightCount = 0;
+  let hueX = 0, hueY = 0, hueW = 0;
   for (const [r, g, b] of samples) {
-    const luma = (.2126 * r + .7152 * g + .0722 * b) / 255;
+    const rn = r / 255, gn = g / 255, bn = b / 255;
+    const luma = .2126 * rn + .7152 * gn + .0722 * bn;
     light += luma;
     lightSquared += luma ** 2;
-    tint += (r - b) / 255;
+    tint += rn - bn;
+    if (luma < .22) darkCount++;
+    if (luma > .78) brightCount++;
+    const hi = Math.max(rn, gn, bn), lo = Math.min(rn, gn, bn), c = hi - lo;
+    chromaSum += c;
+    if (c > .14) {
+      let h = 0;
+      if (hi === rn) h = ((gn - bn) / c) % 6;
+      else if (hi === gn) h = (bn - rn) / c + 2;
+      else h = (rn - gn) / c + 4;
+      const rad = (((h * 60) + 360) % 360) * Math.PI / 180;
+      hueX += Math.cos(rad) * c;
+      hueY += Math.sin(rad) * c;
+      hueW += c;
+    }
   }
   const luma = light / count;
-  return { luma, contrast: Math.sqrt(Math.max(0, lightSquared / count - luma ** 2)), warmth: bound(.5 + tint / count) };
+  const dominantHue = hueW > count * .025 && Math.hypot(hueX, hueY) > .01
+    ? Number((((Math.atan2(hueY, hueX) * 180) / Math.PI + 360) % 360).toFixed(1))
+    : undefined;
+  return {
+    luma,
+    contrast: Math.sqrt(Math.max(0, lightSquared / count - luma ** 2)),
+    warmth: bound(.5 + tint / count),
+    chroma: bound(chromaSum / count),
+    darkShare: bound(darkCount / count),
+    brightShare: bound(brightCount / count),
+    ...(dominantHue != null ? { dominantHue } : {})
+  };
 }
 
 const distance = (a, b) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
@@ -62,7 +89,18 @@ export function colorProfile(pixels) {
   return centers.map((rgb, i) => [hex(rgb), sums[i][3]]).filter(pair => pair[1]).sort((a, b) => b[1] - a[1]).map(pair => pair[0]);
 }
 
-const weatherNames = { rain_glass: 'Дождь на стекле', wind_sparks: 'Ветер и искры', mist: 'Туман', warm_haze: 'Тёплая дымка', clear_light: 'Ясный свет' };
+const weatherNames = {
+  rain_glass: 'Дождь на стекле',
+  wind_sparks: 'Ветер и искры',
+  mist: 'Туман',
+  warm_haze: 'Тёплая дымка',
+  clear_light: 'Ясный свет',
+  snow_drift: 'Снег и тишина',
+  starlight: 'Звёздная ночь',
+  amber_bokeh: 'Огни и боке',
+  petal_drift: 'Листья и ветер',
+  neon_pulse: 'Огни мегаполиса'
+};
 
 export function isVideoItem(item) {
   return Boolean(item) && (item.kind === 'video' || /^data:video\//i.test(item.src || '') || /\.(?:mp4|webm|mov|m4v|ogv)(?:$|\?)/i.test(item.src || ''));

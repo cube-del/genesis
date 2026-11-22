@@ -1,4 +1,7 @@
-const skies = ['mist', 'warm_haze', 'rain_glass', 'wind_sparks', 'clear_light'];
+const skies = [
+  'mist', 'warm_haze', 'rain_glass', 'wind_sparks', 'clear_light',
+  'snow_drift', 'starlight', 'amber_bokeh', 'petal_drift', 'neon_pulse'
+];
 const tau = 2 * Math.PI;
 const duration = 7800;
 const frameTime = 1000 / 30;
@@ -8,6 +11,11 @@ export function skyFor(day) {
   if (skies.includes(code)) return code;
   const label = String(day.weather?.label || day.weather || '').toLowerCase();
   if (/дожд|ливень|rain/.test(label)) return 'rain_glass';
+  if (/снег|мороз|зима|snow/.test(label)) return 'snow_drift';
+  if (/зв[её]зд|лун|космос|star/.test(label)) return 'starlight';
+  if (/неон|мегаполис|витрин|neon/.test(label)) return 'neon_pulse';
+  if (/боке|огни|фонар|свеч|bokeh/.test(label)) return 'amber_bokeh';
+  if (/лист|лепест|petal/.test(label)) return 'petal_drift';
   if (/ветер|ветр|искр|статик|wind/.test(label)) return 'wind_sparks';
   if (/туман|mist|fog/.test(label)) return 'mist';
   if (/дымк|т[её]пл|haze/.test(label)) return 'warm_haze';
@@ -120,6 +128,130 @@ function drawMotes(ctx, particles, w, h, time, warm) {
   }
 }
 
+function drawSnow(ctx, particles, w, h, time) {
+  for (const p of particles) {
+    const y = (p.y * (h + 40) + time * (24 + 46 * p.depth)) % (h + 40) - 20;
+    const sway = Math.sin(time * (.55 + p.depth * .65) + p.phase) * (14 + 26 * p.depth);
+    const x = ((p.x * w + sway + time * (6 + 9 * p.depth)) % (w + 30) + w + 30) % (w + 30) - 15;
+    const r = 1.1 + p.depth * 3.1;
+    const alpha = .28 + p.depth * .56;
+    ctx.fillStyle = `rgba(225,240,252,${(alpha * .45).toFixed(3)})`;
+    ctx.beginPath(); ctx.arc(x, y, r * 1.9, 0, tau); ctx.fill();
+    ctx.fillStyle = `rgba(252,254,255,${alpha.toFixed(3)})`;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, tau); ctx.fill();
+  }
+}
+
+function drawStarlight(ctx, particles, w, h, time) {
+  const anchors = [];
+  for (const [i, p] of particles.entries()) {
+    const x = ((p.x * w + time * (.4 + .6 * p.depth)) % w + w) % w;
+    const y = p.y * h * .86;
+    const twinkle = .22 + .78 * (Math.sin(time * (1.2 + p.depth * 2.2) + p.phase) * .5 + .5);
+    const r = .65 + p.depth * 1.9;
+    ctx.fillStyle = i % 5 === 0
+      ? `rgba(182,216,255,${(twinkle * .85).toFixed(3)})`
+      : `rgba(255,248,230,${(twinkle * .9).toFixed(3)})`;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, tau); ctx.fill();
+    if (p.depth > .76) {
+      anchors.push([x, y, twinkle]);
+      ctx.strokeStyle = `rgba(255,250,236,${(twinkle * .42).toFixed(3)})`;
+      ctx.lineWidth = .7;
+      ctx.beginPath();
+      ctx.moveTo(x - r * 3.2, y); ctx.lineTo(x + r * 3.2, y);
+      ctx.moveTo(x, y - r * 3.2); ctx.lineTo(x, y + r * 3.2);
+      ctx.stroke();
+    }
+  }
+  ctx.lineWidth = .65;
+  for (let i = 0; i < Math.min(anchors.length, 16); i++) {
+    for (let j = i + 1; j < Math.min(anchors.length, 16); j++) {
+      const d = Math.hypot(anchors[i][0] - anchors[j][0], anchors[i][1] - anchors[j][1]);
+      if (d < 160) {
+        ctx.strokeStyle = `rgba(210,226,255,${((1 - d / 160) * .16).toFixed(3)})`;
+        ctx.beginPath(); ctx.moveTo(anchors[i][0], anchors[i][1]); ctx.lineTo(anchors[j][0], anchors[j][1]); ctx.stroke();
+      }
+    }
+  }
+  const cycle = (time * .28) % 1;
+  if (cycle < .24) {
+    const k = cycle / .24;
+    const sx = w * (.18 + k * .42), sy = h * (.10 + k * .18);
+    const grad = ctx.createLinearGradient(sx, sy, sx - 90, sy - 38);
+    grad.addColorStop(0, `rgba(255,252,240,${Math.sin(k * Math.PI) * .75})`);
+    grad.addColorStop(1, 'rgba(255,252,240,0)');
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(sx - 90, sy - 38); ctx.stroke();
+  }
+}
+
+function drawBokeh(ctx, particles, w, h, time, palette) {
+  const colors = ['#ffb85c', '#ffd78a', '#e88b47', ...palette.slice(-2)];
+  const subset = particles.slice(0, Math.min(particles.length, 46));
+  for (const [i, p] of subset.entries()) {
+    const x = ((p.x * w + Math.sin(time * .32 + p.phase) * 28 + time * (3 + 4 * p.depth)) % (w + 90) + w + 90) % (w + 90) - 45;
+    const y = ((p.y * h - time * (6 + 11 * p.depth)) % (h + 90) + h + 90) % (h + 90) - 45;
+    const r = 10 + p.depth * 34;
+    const pulse = .11 + .17 * (Math.sin(time * .9 + p.phase) * .5 + .5);
+    const col = colors[i % colors.length];
+    const g = ctx.createRadialGradient(x, y, r * .12, x, y, r);
+    g.addColorStop(0, col);
+    g.addColorStop(.68, col);
+    g.addColorStop(1, 'rgba(255,190,100,0)');
+    ctx.save();
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, tau); ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawPetals(ctx, particles, w, h, time, palette) {
+  const tones = palette.length ? palette : ['#d68c4a', '#c9a66b', '#8fa67a', '#e4b899'];
+  const subset = particles.slice(0, Math.min(particles.length, 58));
+  for (const [i, p] of subset.entries()) {
+    const x = ((p.x * (w + 80) + time * (26 + 38 * p.depth)) % (w + 80)) - 40;
+    const y = ((p.y * (h + 80) + time * (16 + 26 * p.depth) + Math.sin(time * 1.1 + p.phase) * 24) % (h + 80)) - 40;
+    const rot = p.phase + time * (.7 + p.depth * .9);
+    const size = 4 + p.depth * 6.5;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rot);
+    ctx.scale(1, .48 + .32 * Math.abs(Math.sin(time * 1.6 + p.phase)));
+    ctx.globalAlpha = .34 + p.depth * .42;
+    ctx.fillStyle = tones[i % tones.length];
+    ctx.beginPath();
+    ctx.moveTo(-size, 0);
+    ctx.quadraticCurveTo(0, -size * .9, size, 0);
+    ctx.quadraticCurveTo(0, size * .9, -size, 0);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawNeonPulse(ctx, particles, w, h, time, palette) {
+  const hues = ['#34d6e8', '#f04e98', '#ff9b42', ...palette.slice(-2)];
+  const subset = particles.slice(0, Math.min(particles.length, 44));
+  ctx.lineCap = 'round';
+  for (const [i, p] of subset.entries()) {
+    const dir = i % 2 === 0 ? 1 : -1;
+    const len = 36 + p.depth * 135;
+    const x = ((p.x * (w + len * 2) + dir * time * (75 + 145 * p.depth)) % (w + len * 2) + w + len * 2) % (w + len * 2) - len;
+    const y = p.y * h + Math.sin(time * .6 + p.phase) * 6;
+    const col = hues[i % hues.length];
+    const grad = ctx.createLinearGradient(x - dir * len, y, x, y);
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(1, col);
+    ctx.save();
+    ctx.globalAlpha = .16 + p.depth * .34;
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = 1.2 + p.depth * 2.6;
+    ctx.beginPath(); ctx.moveTo(x - dir * len, y); ctx.lineTo(x, y); ctx.stroke();
+    ctx.restore();
+  }
+}
+
 export function mountDayWeather(host, day, recipe) {
   const sky = recipe.weatherType;
   let speed=recipe.particleSpeed;
@@ -127,7 +259,8 @@ export function mountDayWeather(host, day, recipe) {
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('2d', { alpha: true });
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
-  const accent = day.palette?.find(color => /^#[\da-f]{6}$/i.test(color)) || '#767969';
+  const validPalette = (recipe.palette || day.palette || []).filter(color => /^#[\da-f]{6}$/i.test(color));
+  const accent = validPalette[0] || '#767969';
   const texture = context && ['warm_haze','mist'].includes(sky) ? cloudTexture(random, sky === 'warm_haze') : null;
   const particles = Array.from({length: 190}, () => ({ x: random(), y: random(), phase: random() * tau, depth: random() }));
   let width = 0, height = 0, visible = [], frame = 0, timer = 0, last = -Infinity, done = false;
@@ -144,6 +277,11 @@ export function mountDayWeather(host, day, recipe) {
     context.clearRect(0, 0, width, height);
     if (sky === 'rain_glass') drawRain(context, visible, width, height, seconds);
     else if (sky === 'wind_sparks') drawWind(context, visible, width, height, seconds, accent);
+    else if (sky === 'snow_drift') drawSnow(context, visible, width, height, seconds);
+    else if (sky === 'starlight') drawStarlight(context, visible, width, height, seconds);
+    else if (sky === 'amber_bokeh') drawBokeh(context, visible, width, height, seconds, validPalette);
+    else if (sky === 'petal_drift') drawPetals(context, visible, width, height, seconds, validPalette);
+    else if (sky === 'neon_pulse') drawNeonPulse(context, visible, width, height, seconds, validPalette);
     else {
       if (texture) drawClouds(context, texture, width, height, seconds, sky === 'warm_haze');
       if (sky !== 'mist') drawMotes(context, visible, width, height, seconds, sky === 'warm_haze');

@@ -18,7 +18,12 @@
 .dt-day-nav:hover, .dt-day-nav:focus-within {opacity:1}
 .dt-back, .dt-text-action {border:0;background:transparent;color:inherit;text-decoration:none;gap:6px;padding:4px 0;font:600 .72rem var(--mono)!important;text-transform:uppercase;letter-spacing:.08em}
 .dt-back:hover, .dt-text-action:hover {color:#F4B886}
+.dt-xray-toggle {padding:4px 8px!important;border:1px solid rgba(242,236,224,.22)!important;border-radius:2px;transition:background .18s,border-color .18s,color .18s}
+.dt-xray-toggle[aria-pressed=true] {background:#D2402A!important;border-color:#D2402A!important;color:#FFF8F0!important}
 .dt-day-nav .button {min-height:32px;padding:0 14px;font-size:10.5px}
+.dt-delete-btn {border-color:rgba(210,64,42,.42)!important;color:#F4A698!important}
+.dt-delete-btn:hover {background:rgba(210,64,42,.18)!important;border-color:#D2402A!important;color:#FFF8F0!important}
+.dt-confirm-actions {display:flex;justify-content:flex-end;gap:10px;margin-top:20px;flex-wrap:wrap}
 
 /* Gatefold Double-Page Record Sleeve Spread */
 .dt-gatefold {
@@ -191,7 +196,9 @@
 .dt-analysis-more:hover {color:#a13220}
 .dt-analysis-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .dt-analysis-card {min-width:0;padding:10px 12px 11px;border:1px solid var(--liner-rule);background:rgba(255,255,255,.19)}
+.dt-analysis-card-head {display:flex;align-items:baseline;justify-content:space-between;gap:8px}
 .dt-analysis-card h3 {font:700 .66rem/1.3 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--liner-muted)}
+.dt-credit-badge {font:700 .74rem/1 var(--display);color:var(--accent,#D2402A)}
 .dt-analysis-card strong {display:block;margin:4px 0 3px;font:700 clamp(1rem,1.7vw,1.24rem)/1.15 var(--display)}
 .dt-analysis-card p {font:400 .76rem/1.45 var(--sans);color:#3e3a33}
 .dt-analysis-card .dt-swatches {margin-top:7px}

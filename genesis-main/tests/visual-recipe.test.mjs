@@ -174,6 +174,8 @@ test('contact sheet mat and photo frame match the day color grade instead of sta
     assert.ok(hexLuma(r.sheetBg) <= 0.80, `${day.id}.sheetBg should stay color-graded, not white (${r.sheetBg})`);
     assert.ok(hexLuma(r.frameBorder) <= 0.80, `${day.id}.frameBorder should stay color-graded (${r.frameBorder})`);
     assert.deepEqual(r.analysis.map(item => item.id), ['text', 'photo', 'weather', 'audio']);
+    const sum = r.credits.text + r.credits.photo + r.credits.weather + r.credits.audio;
+    assert.equal(sum, 100, `${day.id}.credits should sum to 100%`);
   }
   const exam = buildVisualRecipe(demo.find(d => d.id === 'after-exam'));
   const flat = buildVisualRecipe(demo.find(d => d.id === 'last-apartment'));
@@ -213,4 +215,28 @@ test('поворот использует фразы из записи и мен
   assert.equal(suggestTurn({...day,text:'Мы не только слушали музыку, но и танцевали.'}),null);
   assert.equal(suggestTurn({...day,text:'Гуляли вдоль реки.'}),null);
   assert.equal(buildTurnFrame(day,{quote:'Паника не отступала.',photoIndex:0}).treatment,'Резче свет и тени');
+});
+
+test('all 10 atmospheric scenarios map cleanly and shape distinct optical grading', () => {
+  const newScenarios = [
+    ['snow_drift', 'Снег и тишина'],
+    ['starlight', 'Звёздная ночь'],
+    ['amber_bokeh', 'Огни и боке'],
+    ['petal_drift', 'Листья и ветер'],
+    ['neon_pulse', 'Огни мегаполиса']
+  ];
+  for (const [code, label] of newScenarios) {
+    const r = recipe({ weatherType: code, text: 'Обычный день в городе.' });
+    assert.equal(r.weatherType, code);
+    assert.equal(r.weatherLabel, label);
+    const fromLabel = buildVisualRecipe({ weather: label, track: { kind: 'link', bpm: null } });
+    assert.equal(fromLabel.weatherType, code);
+  }
+  const clear = recipe({ weatherType: 'clear_light', text: 'Обычный день в городе.' });
+  const neon = recipe({ weatherType: 'neon_pulse', text: 'Обычный день в городе.' });
+  const bokeh = recipe({ weatherType: 'amber_bokeh', text: 'Обычный день в городе.' });
+  const snow = recipe({ weatherType: 'snow_drift', text: 'Обычный день в городе.' });
+  assert.ok(neon.saturation > clear.saturation && neon.geometry > clear.geometry);
+  assert.ok(bokeh.amberShift > clear.amberShift && bokeh.halation > clear.halation);
+  assert.ok(snow.exposure > clear.exposure && snow.mist > clear.mist);
 });

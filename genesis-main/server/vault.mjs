@@ -17,7 +17,10 @@ const invalid = message => { throw new HttpError(400, message); };
 const notFound = () => { throw new HttpError(404, 'Запись или ссылка недоступна.'); };
 const validId = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(value);
 const moods = new Set(['calm', 'joy', 'dream', 'energy']);
-const weatherTypes = new Set(['rain_glass', 'wind_sparks', 'mist', 'warm_haze', 'clear_light']);
+const weatherTypes = new Set([
+  'rain_glass', 'wind_sparks', 'mist', 'warm_haze', 'clear_light',
+  'snow_drift', 'starlight', 'amber_bokeh', 'petal_drift', 'neon_pulse'
+]);
 const imageMime = new Map([
   ['image/jpeg', 'jpg'], ['image/jpg', 'jpg'], ['image/png', 'png'],
   ['image/webp', 'webp'], ['image/gif', 'gif'], ['image/avif', 'avif']
@@ -110,7 +113,11 @@ function cleanDay(input) {
     ...(input.photoLight != null ? { photoLight: {
       luma: score(input.photoLight.luma, 'светлота фотографий'),
       contrast: score(input.photoLight.contrast, 'контраст фотографий'),
-      warmth: score(input.photoLight.warmth, 'теплота фотографий')
+      warmth: score(input.photoLight.warmth, 'теплота фотографий'),
+      ...(Number.isFinite(input.photoLight.chroma) ? { chroma: score(input.photoLight.chroma, 'насыщенность фотографий') } : {}),
+      ...(Number.isFinite(input.photoLight.darkShare) ? { darkShare: score(input.photoLight.darkShare, 'доля теней') } : {}),
+      ...(Number.isFinite(input.photoLight.brightShare) ? { brightShare: score(input.photoLight.brightShare, 'доля светов') } : {}),
+      ...(Number.isFinite(input.photoLight.dominantHue) ? { dominantHue: score(input.photoLight.dominantHue, 'доминантный оттенок', 0, 360) } : {})
     } } : {}),
     ...(input.videoMotion != null ? { videoMotion: score(input.videoMotion, 'динамика видео') } : {}),
     explanation: Array.isArray(explanation) ? explanation.slice(0, 12).map(item => stringValue(item, 1600, 'Объяснение')) : [],
@@ -398,6 +405,19 @@ export async function openVault(vaultDir, publicDir) {
   return {
     studies: () => studies,
     list: () => list(), get: id => view(record(id).day), create: input => change(() => create(input)),
+    remove: id => change(async () => {
+      const item = record(id);
+      await rm(item.folder, { recursive: true, force: true });
+      days.delete(item.day.id);
+      const shareKey = 'day/' + item.day.id;
+      if (shares[shareKey]) {
+        const next = { ...shares };
+        delete next[shareKey];
+        await atomicWrite(shareFile, pretty(next));
+        shares = next;
+      }
+      return { deleted: item.day.id };
+    }),
     setFavorite: (id, favorite) => change(async () => {
       if (typeof favorite !== 'boolean') invalid('Укажите состояние избранного.');
       const item = record(id);

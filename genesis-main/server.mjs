@@ -206,6 +206,7 @@ export async function createDaytraceServer(options = {}) {
         if (day) {
           const [, id, action] = day;
           if (!action && method === 'GET') return json(res, vault.get(id));
+          if (!action && method === 'DELETE') return json(res, await vault.remove(id));
           if (action === 'track' && method === 'PUT') return json(res, await vault.updateTrack(id, (await readBody(req)).track));
           if (['author-look','moment','turn'].includes(action) && method === 'PUT') {
             return json(res, await vault.updateMemory(id, action, await readBody(req, 8192)));

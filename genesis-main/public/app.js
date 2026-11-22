@@ -1,12 +1,13 @@
 import {icon,esc,api,navigate,modal,closeModal,shareDialog,toast,dateLabel,moods} from './ui.js';
-import {playTrack,stopTrack,playingDay,spotifyLinks} from './media.js';
+import {playTrack,stopTrack,playingDay,spotifyLinks,setVinylAging} from './media.js';
 import {showSpotifyPlayer} from './spotify.js';
 import {openRecall} from './revisit.js';
 import {coverCaption} from './memory.js';
 import {archivePatina} from './patina.js';
 import {buildVisualRecipe} from './visual-recipe.js';
 import {contactSheetLayout} from './postcard.js';
-import {renderRoadmap,renderTopoBackdrop} from './roadmap.js';
+import {renderRoadmap,renderTopoBackdrop,getRoadmapJourney} from './roadmap.js';
+import {openVinylPosterModal} from './vinyl-poster.js';
 
 const main=document.querySelector('#main');
 const header=document.querySelector('#site-header');
@@ -130,6 +131,172 @@ function card(day){
     `</article>`;
 }
 let roadmapList=[], roadmapRaf=0;
+const journey={active:false,paused:false,index:-1,raf:0,timer:0,progressRaf:0,len:0,dwellStart:0,dwellMs:4800,hud:null,tooltip:null};
+
+function updateJourneyButton(){
+  const btn=main.querySelector('[data-journey]');
+  if(!btn)return;
+  btn.classList.toggle('is-active',journey.active);
+  btn.setAttribute('aria-pressed',String(journey.active));
+  btn.innerHTML=icon(journey.active?'pause':'route',15)+(journey.active?'Остановить маршрут':'Проиграть маршрут');
+}
+function ensureJourneyHud(){
+  if(journey.hud && journey.hud.isConnected)return journey.hud;
+  const el=document.createElement('aside');
+  el.className='journey-hud';
+  el.setAttribute('aria-label','Проигрывание маршрута');
+  el.innerHTML=
+    `<div class="jh-progress"><i data-jh-bar></i></div>`+
+    `<div class="jh-row">`+
+      `<div class="jh-info"><span class="jh-step" data-jh-step></span><strong class="jh-title" data-jh-title></strong><span class="jh-delta" data-jh-delta></span></div>`+
+      `<div class="jh-controls">`+
+        `<button type="button" class="jh-btn" data-jh="prev" aria-label="Предыдущий день">${icon('chevron-left',16)}</button>`+
+        `<button type="button" class="jh-btn jh-btn-main" data-jh="toggle" aria-label="Пауза">${icon('pause',14)}</button>`+
+        `<button type="button" class="jh-btn" data-jh="next" aria-label="Следующий день">${icon('chevron-right',16)}</button>`+
+        `<a class="jh-open" data-nav data-jh-open href="/">Открыть ${icon('arrow-up-right',13)}</a>`+
+        `<button type="button" class="jh-btn" data-jh="stop" aria-label="Закрыть маршрут">${icon('x',15)}</button>`+
+      `</div>`+
+    `</div>`;
+  el.addEventListener('click',e=>{
+    const b=e.target.closest('[data-jh]');if(!b)return;
+    const act=b.dataset.jh;
+    if(act==='stop')stopJourney();
+    else if(act==='prev')goToJourneyStop((journey.index-1+roadmapList.length)%roadmapList.length);
+    else if(act==='next')goToJourneyStop((journey.index+1)%roadmapList.length);
+    else if(act==='toggle')toggleJourneyPause();
+  });
+  document.body.appendChild(el);
+  journey.hud=el;
+  return el;
+}
+function stopJourney(){
+  clearTimeout(journey.timer);
+  cancelAnimationFrame(journey.raf);
+  cancelAnimationFrame(journey.progressRaf);
+  journey.timer=journey.raf=journey.progressRaf=0;
+  const wasActive=journey.active;
+  journey.active=false;
+  journey.paused=false;
+  journey.index=-1;
+  main.querySelectorAll('.record-sleeve.is-journey-active').forEach(el=>el.classList.remove('is-journey-active'));
+  const stage=main.querySelector('#roadmap-stage');
+  getRoadmapJourney(stage)?.showBeacon(false);
+  journey.hud?.remove();
+  journey.hud=null;
+  if(wasActive){stopTrack();refreshSound();}
+  updateJourneyButton();
+}
+function toggleJourneyPause(){
+  if(!journey.active)return;
+  journey.paused=!journey.paused;
+  const btn=journey.hud?.querySelector('[data-jh=toggle]');
+  if(btn){
+    btn.innerHTML=icon(journey.paused?'play':'pause',14);
+    btn.setAttribute('aria-label',journey.paused?'Продолжить':'Пауза');
+  }
+  if(journey.paused){
+    clearTimeout(journey.timer);
+    cancelAnimationFrame(journey.progressRaf);
+    stopTrack();
+    refreshSound();
+  }else{
+    goToJourneyStop(journey.index);
+  }
+}
+function journeyDeltaText(prevDay, currDay){
+  const rCurr=buildVisualRecipe(currDay);
+  if(!prevDay){
+    return [dateLabel(currDay.date), rCurr.bpm?Math.round(rCurr.bpm)+' BPM':null, rCurr.weatherLabel].filter(Boolean).join(' · ');
+  }
+  const rPrev=buildVisualRecipe(prevDay);
+  const parts=[];
+  if(rPrev.bpm && rCurr.bpm) parts.push(`${Math.round(rPrev.bpm)} → ${Math.round(rCurr.bpm)} BPM`);
+  else if(rCurr.bpm) parts.push(`${Math.round(rCurr.bpm)} BPM`);
+  if(rPrev.weatherLabel!==rCurr.weatherLabel) parts.push(`${rPrev.weatherLabel} → ${rCurr.weatherLabel}`);
+  else parts.push(rCurr.weatherLabel);
+  return parts.join(' · ');
+}
+function goToJourneyStop(idx){
+  if(!journey.active || !roadmapList.length)return;
+  clearTimeout(journey.timer);
+  cancelAnimationFrame(journey.raf);
+  cancelAnimationFrame(journey.progressRaf);
+  const safeIdx=((idx%roadmapList.length)+roadmapList.length)%roadmapList.length;
+  const prevIdx=journey.index;
+  journey.index=safeIdx;
+  const day=roadmapList[safeIdx];
+  const prevDay=prevIdx>=0 && prevIdx!==safeIdx ? roadmapList[prevIdx] : null;
+  const stage=main.querySelector('#roadmap-stage');
+  const ctrl=getRoadmapJourney(stage);
+
+  main.querySelectorAll('.record-sleeve').forEach(el=>{
+    const hit=el.dataset.card===day.id;
+    el.classList.toggle('is-journey-active',hit);
+    if(hit) el.scrollIntoView({behavior:'smooth',block:'center'});
+  });
+
+  const hud=ensureJourneyHud();
+  hud.querySelector('[data-jh-step]').textContent=`${String(safeIdx+1).padStart(2,'0')} / ${String(roadmapList.length).padStart(2,'0')} · ${catalogCode(day)}`;
+  hud.querySelector('[data-jh-title]').textContent=day.title;
+  hud.querySelector('[data-jh-delta]').textContent=journeyDeltaText(prevDay,day);
+  const openLink=hud.querySelector('[data-jh-open]');
+  if(openLink) openLink.setAttribute('href',dayUrl(day.id));
+  const bar=hud.querySelector('[data-jh-bar]');
+  if(bar) bar.style.transform='scaleX(0)';
+  const toggleBtn=hud.querySelector('[data-jh=toggle]');
+  if(toggleBtn){toggleBtn.innerHTML=icon('pause',14);toggleBtn.setAttribute('aria-label','Пауза');}
+  journey.paused=false;
+
+  stopTrack();
+  if(!spotifyLinks(day.track) && ['ambient','file'].includes(day.track?.kind)){
+    playTrack(day,()=>refreshSound(),{reveal:true}).then(()=>refreshSound()).catch(()=>refreshSound());
+  }else{
+    refreshSound();
+  }
+
+  const startLen=prevIdx>=0 ? journey.len : 0;
+  const targetLen=ctrl?.stopLengths?.[safeIdx] ?? 0;
+  if(ctrl){
+    ctrl.showBeacon(true);
+    const t0=performance.now();
+    const travelMs=prevIdx>=0 ? 920 : 620;
+    const stepTravel=now=>{
+      if(!journey.active)return;
+      const p=Math.min(1,(now-t0)/travelMs);
+      const ease=p<0.5 ? 4*p*p*p : 1 - Math.pow(-2*p+2,3)/2;
+      journey.len=startLen+(targetLen-startLen)*ease;
+      ctrl.setProgress(journey.len);
+      if(p<1) journey.raf=requestAnimationFrame(stepTravel);
+    };
+    journey.raf=requestAnimationFrame(stepTravel);
+  }
+
+  journey.dwellStart=performance.now();
+  const tickBar=now=>{
+    if(!journey.active || journey.paused)return;
+    const p=Math.min(1,(now-journey.dwellStart)/journey.dwellMs);
+    if(bar) bar.style.transform=`scaleX(${p.toFixed(4)})`;
+    if(p<1) journey.progressRaf=requestAnimationFrame(tickBar);
+  };
+  journey.progressRaf=requestAnimationFrame(tickBar);
+  journey.timer=setTimeout(()=>{
+    if(!journey.active || journey.paused)return;
+    if(safeIdx+1<roadmapList.length) goToJourneyStop(safeIdx+1);
+    else{
+      toast('Маршрут архива завершён.');
+      stopJourney();
+    }
+  }, journey.dwellMs);
+}
+function startJourney(startIdx=0){
+  if(!roadmapList.length){toast('В этом жанре пока нет пластинок для маршрута.');return;}
+  journey.active=true;
+  journey.paused=false;
+  journey.index=-1;
+  journey.len=0;
+  updateJourneyButton();
+  goToJourneyStop(startIdx);
+}
 function scheduleRoadmap(){
   if(roadmapRaf) cancelAnimationFrame(roadmapRaf);
   roadmapRaf=requestAnimationFrame(()=>{
@@ -138,10 +305,18 @@ function scheduleRoadmap(){
     const stage=main.querySelector('#roadmap-stage');
     const grid=main.querySelector('#day-grid');
     renderTopoBackdrop(main);
-    if(stage && grid) renderRoadmap(stage,grid,roadmapList);
+    if(stage && grid){
+      const ctrl=renderRoadmap(stage,grid,roadmapList);
+      if(journey.active && ctrl && journey.index>=0){
+        ctrl.showBeacon(true);
+        journey.len=ctrl.stopLengths[journey.index] ?? 0;
+        ctrl.setProgress(journey.len);
+      }
+    }
   });
 }
 function updateGrid(){
+  if(journey.active) stopJourney();
   let list=currentSet.filter(d=>prefs.filter==='all'||prefs.filter===d.mood);
   list=[...list].sort((a,b)=>prefs.sort==='old'?a.date.localeCompare(b.date):prefs.sort==='warmth'?b.warmth-a.warmth:prefs.sort==='tempo'?(b.track.bpm||0)-(a.track.bpm||0):b.date.localeCompare(a.date));
   roadmapList=list;
@@ -153,12 +328,17 @@ function updateGrid(){
 }
 function renderArchive(){
   currentSet=allDays.filter(d=>!favorites||d.favorite);
+  setVinylAging(prefs.age/365);
   const lead=favorites
     ?'Отложенные пластинки, к которым хочется возвращаться и переслушивать.'
     :pluralAlbums(allDays.length)+'. Каждый день — конверт с контактным листом, палитрой и ритмом.';
+  const extraTools=currentSet.length
+    ? `<button type="button" class="button secondary" data-journey aria-pressed="false">${icon('route',15)}Проиграть маршрут</button>`+
+      `<button type="button" class="button secondary" data-vinyl-poster>${icon('disc',15)}Слепок архива</button>`
+    : '';
   const actions=!shared
-    ?'<div class="crate-actions"><a class="button primary" data-nav href="/create">Записать новый день</a>'+(favorites?'<a class="button secondary" data-nav href="/">Весь ящик</a>':(allDays.length ? '<button type="button" class="button secondary" data-recall>' + icon('headphones',15) + ' Вспомнить по детали</button>' : '') + '<button type="button" class="button secondary" data-share>Дать послушать</button>')+'</div>'
-    :'';
+    ?'<div class="crate-actions"><a class="button primary" data-nav href="/create">Записать новый день</a>'+extraTools+(favorites?'<a class="button secondary" data-nav href="/">Весь ящик</a>':(allDays.length ? '<button type="button" class="button secondary" data-recall>' + icon('headphones',15) + ' Вспомнить по детали</button>' : '') + '<button type="button" class="button secondary" data-share>Дать послушать</button>')+'</div>'
+    :(extraTools?'<div class="crate-actions">'+extraTools+'</div>':'');
   const tabs=[
     `<button class="crate-tab crate-tab-all ${prefs.filter==='all'?'selected':''}" data-filter="all" aria-pressed="${prefs.filter==='all'}"><small>${favorites?'ИЗБРАННОЕ':'ВЕСЬ ЯЩИК'}</small><strong id="visible-count">${currentSet.length}</strong></button>`,
     ...Object.entries(moods).map(([key,m])=>`<button class="crate-tab ${key===prefs.filter?'selected':''}" data-filter="${key}" aria-pressed="${key===prefs.filter}"><small>ЖАНР</small><strong>${esc(m.label)}</strong></button>`)
@@ -171,12 +351,37 @@ function renderArchive(){
       ? `<nav class="crate-dividers" role="group" aria-label="Жанры и настроения">${tabs}</nav>`+
         `<div class="crate-toolbar"><div class="sort-pills" role="group" aria-label="Сортировка">${sortPills}</div>`+
         `<label class="shelf-aging"><span>На полке</span><input id="patina-range" type="range" min="0" max="365" value="${365-prefs.age}" aria-label="Состояние конвертов: от старой полки до сейчас"><span>Сейчас</span><output id="patina-out">${ageLabel()}</output></label></div>`+
-        `<div class="roadmap-stage" id="roadmap-stage"><svg class="roadmap-svg" id="roadmap-svg" aria-hidden="true"></svg><div class="days-grid" id="day-grid"></div></div>`
+        `<div class="roadmap-stage" id="roadmap-stage"><svg class="roadmap-svg" id="roadmap-svg" aria-hidden="true"></svg><div class="rm-tooltip" id="rm-tooltip" hidden></div><div class="days-grid" id="day-grid"></div></div>`
       : '<div class="empty-grid">'+icon('image',40)+'<h3>Запишите свою первую пластинку</h3><p>Начните с фотографии или видео и пары строк о том, что запомнилось.</p>'+(!shared?'<a class="button primary" data-nav href="/create">Записать новый день</a>':'')+'</div>')+
     '<footer class="archive-footer"><span><img src="/mark.svg" width="18" alt="">DAYTRACE</span><span>'+icon(shared?'link':'lock',13)+(shared?'Ящик по ссылке':'Личный ящик пластинок')+'</span></footer>';
   main.querySelector('#patina-range')?.addEventListener('input',updateAge);
+  const svgEl=main.querySelector('#roadmap-svg');
+  const tipEl=main.querySelector('#rm-tooltip');
+  if(svgEl && tipEl){
+    svgEl.addEventListener('pointerover',e=>{
+      const node=e.target.closest('.rm-interactive');
+      if(!node || !node.dataset.tip)return;
+      const stageRect=main.querySelector('#roadmap-stage').getBoundingClientRect();
+      const nr=node.getBoundingClientRect();
+      tipEl.textContent=node.dataset.tip;
+      tipEl.hidden=false;
+      tipEl.style.left=`${(nr.left+nr.width/2-stageRect.left).toFixed(1)}px`;
+      tipEl.style.top=`${(nr.top-stageRect.top-10).toFixed(1)}px`;
+    });
+    svgEl.addEventListener('pointerout',e=>{
+      if(e.target.closest('.rm-interactive') && !e.relatedTarget?.closest?.('.rm-interactive')) tipEl.hidden=true;
+    });
+    svgEl.addEventListener('click',e=>{
+      const node=e.target.closest('.rm-interactive');
+      if(!node || node.dataset.jumpIndex===undefined)return;
+      const idx=Number(node.dataset.jumpIndex);
+      if(Number.isFinite(idx)) startJourney(idx);
+    });
+  }
   const onResize=()=>scheduleRoadmap();
+  const onKey=e=>{if(e.key==='Escape' && journey.active) stopJourney();};
   window.addEventListener('resize',onResize,{passive:true});
+  document.addEventListener('keydown',onKey);
   let ro=null;
   const gridEl=main.querySelector('#day-grid');
   if(gridEl && typeof ResizeObserver!=='undefined'){
@@ -184,7 +389,9 @@ function renderArchive(){
     ro.observe(gridEl);
   }
   dispose=()=>{
+    stopJourney();
     window.removeEventListener('resize',onResize);
+    document.removeEventListener('keydown',onKey);
     ro?.disconnect();
     if(roadmapRaf){cancelAnimationFrame(roadmapRaf);roadmapRaf=0}
   };
@@ -193,6 +400,7 @@ function renderArchive(){
 }
 function updateAge(event){
   prefs.age=365-Number(event.currentTarget.value);
+  setVinylAging(prefs.age/365);
   try{sessionStorage.setItem('daytrace-time-offset',String(prefs.age))}catch{}
   const out=main.querySelector('#patina-out');
   if(out)out.value=ageLabel();
@@ -229,7 +437,21 @@ main.addEventListener('click',async event=>{
   if(!main.classList.contains('archive-page'))return;
   const b=event.target.closest('button');if(!b)return;
   if(b.hasAttribute('data-share'))return shareDialog();
-  if(b.hasAttribute('data-recall') && !shared) { openRecall(currentSet); refreshSound(); return; }
+  if(b.hasAttribute('data-recall') && !shared) { if(journey.active) stopJourney(); openRecall(currentSet); refreshSound(); return; }
+  if(b.hasAttribute('data-journey')){
+    if(journey.active) stopJourney();
+    else startJourney(0);
+    return;
+  }
+  if(b.hasAttribute('data-vinyl-poster')){
+    const source=roadmapList.length?roadmapList:currentSet;
+    openVinylPosterModal(source,{
+      title:favorites?'Избранные пластинки':'Ящик с пластинками',
+      catalogCode,
+      onSelectDay:day=>navigate(dayUrl(day.id))
+    });
+    return;
+  }
   if(b.hasAttribute('data-reset-filter')){
     if(favorites&&!currentSet.length)return navigate('/');
     prefs.filter='all';renderArchive();return;
