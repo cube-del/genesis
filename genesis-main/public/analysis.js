@@ -1,5 +1,6 @@
 import { api } from './ui.js';
-import { frameComposition } from './composition.js';
+import { spectralProfile } from './spectral-profile.js';
+import { imageFocus } from './composition.js';
 
 const bound = (value, low = 0, high = 1) => Math.max(low, Math.min(high, value));
 
@@ -16,7 +17,7 @@ function photoSamples(img) {
   return samples;
 }
 
-function photoLight(samples) {
+export function photoLight(samples) {
   const count = samples.length || 1;
   let light = 0, lightSquared = 0, tint = 0;
   for (const [r, g, b] of samples) {
@@ -32,7 +33,7 @@ function photoLight(samples) {
 const distance = (a, b) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
 const hex = rgb => '#' + rgb.map(c => Math.round(c).toString(16).padStart(2, '0')).join('').toUpperCase();
 
-function colorProfile(pixels) {
+export function colorProfile(pixels) {
   if (!pixels.length) return ['#FFFFFF'];
   const centers = [pixels[Math.floor(pixels.length / 2)]];
   while (centers.length < 5) {
@@ -63,36 +64,145 @@ function colorProfile(pixels) {
 
 const weatherNames = { rain_glass: 'Дождь на стекле', wind_sparks: 'Ветер и искры', mist: 'Туман', warm_haze: 'Тёплая дымка', clear_light: 'Ясный свет' };
 
+export function isVideoItem(item) {
+  return Boolean(item) && (item.kind === 'video' || /^data:video\//i.test(item.src || '') || /\.(?:mp4|webm|mov|m4v|ogv)(?:$|\?)/i.test(item.src || ''));
+}
+
+function loadVideo(src) {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = 'auto';
+    video.crossOrigin = 'anonymous';
+    const fail = () => reject(Error('Не удалось открыть видео. Попробуйте MP4 или WebM.'));
+    video.onerror = fail;
+    video.onloadeddata = () => resolve(video);
+    video.src = src;
+    video.load();
+  });
+}
+
+function seekVideo(video, target) {
+  return new Promise(resolve => {
+    const clamped = Math.max(0, Math.min(Number.isFinite(video.duration) ? Math.max(0, video.duration - 0.05) : 0, target));
+    if (Math.abs(video.currentTime - clamped) < 0.04) { resolve(); return; }
+    let done = false;
+    const finish = () => { if (done) return; done = true; video.onseeked = null; resolve(); };
+    video.onseeked = finish;
+    setTimeout(finish, 1800);
+    try { video.currentTime = clamped; } catch { finish(); }
+  });
+}
+
+function captureCanvas(source, maxSide = 768) {
+  const sw = source.videoWidth || source.naturalWidth || 1;
+  const sh = source.videoHeight || source.naturalHeight || 1;
+  const scale = Math.min(1, maxSide / Math.max(sw, sh));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(sw * scale));
+  canvas.height = Math.max(1, Math.round(sh * scale));
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#0e100d';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+export async function inspectVideoFile(src) {
+  const video = await loadVideo(src);
+  try {
+    const duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration.toFixed(1)) : 0;
+    await seekVideo(video, duration > 0.6 ? Math.min(duration * 0.18, 2.5) : 0);
+    const canvas = captureCanvas(video, 768);
+    return {
+      poster: canvas.toDataURL('image/jpeg', 0.82),
+      duration,
+      width: video.videoWidth || 0,
+      height: video.videoHeight || 0,
+      focus: imageFocus(canvas)
+    };
+  } finally {
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+  }
+}
+
 async function preparePhoto(photo) {
+  if (isVideoItem(photo)) {
+    const video = await loadVideo(photo.src);
+    try {
+      const duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration.toFixed(1)) : 0;
+      const stamps = duration >= 1.2
+        ? [0.10, 0.38, 0.66, 0.90].map(f => Number((duration * f).toFixed(1)))
+        : [0];
+      const frames = [];
+      for (const time of stamps) {
+        await seekVideo(video, time);
+        const canvas = captureCanvas(video, 768);
+        const samples = photoSamples(canvas);
+        frames.push({ src: canvas.toDataURL('image/jpeg', 0.78), time, samples, light: photoLight(samples) });
+      }
+      // Estimate temporal motion from mean frame-to-frame pixel difference across sampled keyframes.
+      let motion = 0.22;
+      if (frames.length > 1) {
+        let diffTotal = 0, pairs = 0;
+        for (let k = 1; k < frames.length; k++) {
+          const prev = frames[k - 1].samples, curr = frames[k].samples;
+          const n = Math.min(prev.length, curr.length);
+          if (!n) continue;
+          let sum = 0;
+          for (let i = 0; i < n; i++) {
+            sum += (Math.abs(curr[i][0] - prev[i][0]) + Math.abs(curr[i][1] - prev[i][1]) + Math.abs(curr[i][2] - prev[i][2])) / (3 * 255);
+          }
+          diffTotal += sum / n;
+          pairs++;
+        }
+        if (pairs) motion = Number(bound((diffTotal / pairs) * 3.1).toFixed(2));
+      }
+      return {
+        kind: 'video', duration, motion,
+        frames: frames.map(({ src, time, light }) => ({ src, time, light })),
+        samples: frames.flatMap(f => f.samples)
+      };
+    } finally {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    }
+  }
   const img = new Image();
   img.src = photo.src;
   try { await img.decode(); } catch { throw Error('Не удалось открыть фото «' + photo.name + '». Попробуйте JPEG, PNG или WebP.'); }
-  const scale = Math.min(1, 768 / Math.max(img.naturalWidth, img.naturalHeight));
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
-  canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = 'white';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-  return { src: canvas.toDataURL('image/jpeg', 0.8), samples: photoSamples(canvas) };
+  const canvas = captureCanvas(img, 768);
+  return { kind: 'image', src: canvas.toDataURL('image/jpeg', 0.8), samples: photoSamples(canvas) };
 }
 
 export async function analyzeDay(text, photos, { date, expectedProvider, signal, onPrepared } = {}) {
-  const frames = await Promise.all(photos.map(preparePhoto));
+  const prepared = await Promise.all(photos.map(preparePhoto));
   signal?.throwIfAborted();
-  const palette = colorProfile(frames.flatMap(frame => frame.samples));
+  const pixels = prepared.flatMap(item => item.samples);
+  const palette = colorProfile(pixels);
+  const videoMotions = prepared.filter(item => item.kind === 'video' && Number.isFinite(item.motion)).map(item => item.motion);
+  const videoMotion = videoMotions.length ? Number((videoMotions.reduce((a, b) => a + b, 0) / videoMotions.length).toFixed(2)) : undefined;
   onPrepared?.();
-  const body = { date, text, expectedProvider, photos: frames.map(({ src, samples }) => ({ src, light: photoLight(samples) })) };
+  const body = {
+    date, text, expectedProvider,
+    photos: prepared.map(item => item.kind === 'video'
+      ? { kind: 'video', duration: item.duration, motion: item.motion, frames: item.frames }
+      : { src: item.src, light: photoLight(item.samples) })
+  };
   const result = await api('/api/atmosphere', { method: 'POST', body, signal });
   const focus = photos[0]?.focus;
   if (focus && result.explanation?.length >= 2) {
-    const layout = frameComposition(photos[0], result.mood);
-    const horizontal = { left: 'слева', right: 'справа', center: 'по центру' }[layout.align];
     const detail = focus.manual ? 'центр кадра выбрали вы' : 'центр кадра выбран по цветовым границам и контрасту';
-    result.explanation[1] += ' На обложке ' + detail + '. Подпись ' + (layout.top ? 'сверху' : 'снизу') + ', ' + horizontal + '.';
+    result.explanation[1] += ' На обложке ' + detail + '.';
   }
-  return { ...result, weather: weatherNames[result.weatherType], palette };
+  return {
+    ...result, weather: weatherNames[result.weatherType], palette, photoLight: photoLight(pixels),
+    ...(videoMotion != null ? { videoMotion } : {})
+  };
 }
 
 export async function pickTrack(day, previousTrack, signal) {
@@ -118,10 +228,10 @@ export function fileData(file) {
 
 // Goertzel bins across four octaves form a chromagram. Compare its pitch-class
 // distribution with all transpositions of the Krumhansl–Schmuckler profiles.
-function tonalMode(buffer, length) {
-  const stride = Math.max(1, Math.floor(buffer.sampleRate / 6000));
-  const rate = buffer.sampleRate / stride, frameSize = 2048;
-  const signal = buffer.getChannelData(0), frame = new Float32Array(frameSize), chroma = new Float64Array(12);
+function tonalMode(signal, sampleRate, length) {
+  const stride = Math.max(1, Math.floor(sampleRate / 6000));
+  const rate = sampleRate / stride, frameSize = 2048;
+  const frame = new Float32Array(frameSize), chroma = new Float64Array(12);
   const notes = Array.from({ length: 48 }, (_, i) => {
     const midi = 36 + i, hz = 440 * 2 ** ((midi - 69) / 12);
     return { pitch: midi % 12, coeff: 2 * Math.cos(2 * Math.PI * hz / rate) };
@@ -144,7 +254,7 @@ function tonalMode(buffer, length) {
     }
   }
   const largest = Math.max(...chroma);
-  if (largest < 0.01 || chroma.filter(x => x > largest * 0.21).length < 3) return null;
+  if (largest < 0.01 || chroma.filter(x => x > largest * 0.21).length < 3) return { modeConfidence: 0 };
   const profiles = {
     major: [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88],
     minor: [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17],
@@ -163,8 +273,10 @@ function tonalMode(buffer, length) {
       best[mode] = Math.max(best[mode], corr / (Math.sqrt(p2 * c2) || 1));
     }
   }
-  if (Math.max(best.major, best.minor) < 0.45 || Math.abs(best.major - best.minor) < 0.06) return null;
-  return best.major > best.minor ? 'major' : 'minor';
+  const fit = Math.max(best.major, best.minor), gap = Math.abs(best.major - best.minor);
+  const modeConfidence = bound(fit * Math.min(1, gap / .25));
+  if (fit < .45 || gap < .06) return { modeConfidence };
+  return { mode: best.major > best.minor ? 'major' : 'minor', modeConfidence };
 }
 
 function pulseBpm(pulse, rate, hop) {
@@ -193,24 +305,40 @@ function pulseBpm(pulse, rate, hop) {
   return null;
 }
 
-// Compare the onset envelope with delayed copies to estimate the musical pulse.
-// No tempo is reported for silence, unpitched noise or an ambiguous pulse.
-function analyzeExcerpt(buffer, includeMode = true) {
+// Compare the onset envelope with delayed copies across sliding windows to estimate
+// a steady musical pulse, plus spectral brightness, percussiveness, mode & 56-point envelope.
+function analyzeExcerpt(buffer, includeDetails = true) {
   const rate = buffer.sampleRate, hop = Math.max(1, Math.round(rate / 100));
   const length = Math.min(buffer.length, Math.floor(rate * 30));
-  if (length < hop * 30) return { bpm: null };
+  if (length < hop * 30) return { bpm: null, pulseStatus: 'weak' };
   const channels = Array.from({ length: buffer.numberOfChannels }, (_, i) => buffer.getChannelData(i));
+  let signal = channels[0];
+  if (channels.length > 1) {
+    const mix = new Float32Array(length);
+    let strongestPower = 0;
+    for (const channel of channels) {
+      let power = 0;
+      for (let i = 0; i < length; i++) {
+        mix[i] += channel[i] / channels.length;
+        power += channel[i] ** 2;
+      }
+      if (power > strongestPower) { signal = channel; strongestPower = power; }
+    }
+    // Preserve both sides of the stereo image. Use one channel if reducing to
+    // mono would cancel an out-of-phase recording.
+    let mixPower = 0;
+    for (const sample of mix) mixPower += sample ** 2;
+    if (mixPower > strongestPower * .04) signal = mix;
+  }
   const envelope = [], highs = [], levels = [];
   let windowPower = 0;
-  let preceding = 0, precedingHigh = 0, total = 0, crossings = 0, last = 0;
+  let preceding = 0, precedingHigh = 0, total = 0, last = 0;
   for (let start = 0; start + hop <= length; start += hop) {
     let power = 0, treble = 0;
     for (let i = start; i < start + hop; i++) {
-      let x = 0;
-      for (const channel of channels) x += channel[i] / channels.length;
+      const x = signal[i];
       power += x * x;
       treble += (x - last) ** 2;
-      if ((last < 0) !== (x < 0)) crossings++;
       last = x;
     }
     total += power; windowPower += power;
@@ -223,7 +351,6 @@ function analyzeExcerpt(buffer, includeMode = true) {
     preceding = rms; precedingHigh = high;
   }
   const energy = bound(Math.sqrt(total / length) * 3.4);
-  const brightness = bound(crossings / length * rate / 7200);
   let bpm = null, pulseStatus = 'weak';
   levels.sort((a, b) => a - b);
   const quiet = levels[Math.floor(levels.length * 0.1)] || 0;
@@ -260,20 +387,38 @@ function analyzeExcerpt(buffer, includeMode = true) {
       pulseStatus = 'variable';
     }
   }
-  return { bpm, pulseStatus: bpm ? 'steady' : pulseStatus, energy, brightness, mode: includeMode && energy > 0.008 ? tonalMode(buffer, length) : null };
+  const status = bpm ? 'steady' : pulseStatus;
+  if (energy < .001) return { bpm, pulseStatus: status, energy, modeConfidence: 0 };
+  if (!includeDetails) return { bpm, pulseStatus: status, energy };
+  const slots = 56, stride = Math.max(1, Math.floor(length / slots));
+  const rawEnv = [];
+  for (let s = 0; s < slots; s++) {
+    const from = s * stride, to = Math.min(length, from + stride);
+    let p = 0;
+    for (let i = from; i < to; i++) p += signal[i] * signal[i];
+    rawEnv.push(Math.sqrt(p / Math.max(1, to - from)));
+  }
+  const peak = Math.max(...rawEnv, 0.001);
+  const envelope56 = rawEnv.map(v => Number(bound(v / peak).toFixed(2)));
+  return { bpm, pulseStatus: status, energy, envelope: envelope56, ...spectralProfile(signal, rate, length), ...tonalMode(signal, rate, length) };
 }
 
 export function audioSignals(buffer) {
-  const result = analyzeExcerpt(buffer);
+  let result = analyzeExcerpt(buffer, true);
   // A quiet intro or a change after the first verse should not define a whole song.
   if (buffer.length <= 60 * buffer.sampleRate) return result;
   const length = Math.round(12 * buffer.sampleRate);
   const estimates = [result.bpm];
   for (const fraction of [.5, .85]) {
     const start = Math.floor((buffer.length - length) * fraction);
-    const excerpt = { sampleRate: buffer.sampleRate, length, numberOfChannels: buffer.numberOfChannels,
-      getChannelData: channel => buffer.getChannelData(channel).subarray(start, start + length) };
-    estimates.push(analyzeExcerpt(excerpt, false).bpm);
+    const excerpt = {
+      sampleRate: buffer.sampleRate, length, numberOfChannels: buffer.numberOfChannels,
+      getChannelData: channel => buffer.getChannelData(channel).subarray(start, start + length)
+    };
+    const needDetails = result.energy < .001;
+    const part = analyzeExcerpt(excerpt, needDetails);
+    if (needDetails && part.energy >= .001) result = { ...result, ...part, pulseStatus: result.pulseStatus };
+    estimates.push(part.bpm);
   }
   const values = estimates.filter(Number.isFinite);
   if (!['variable', 'ambiguous'].includes(result.pulseStatus) && values.length >= 2 && Math.max(...values) / Math.min(...values) < 1.06) {

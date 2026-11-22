@@ -1,29 +1,29 @@
 // Canonical Spotify track IDs and titles checked against Spotify's public oEmbed.
-// Warmth and energy are editorial matching weights, not measured audio features.
+// Fields: [id, title, artist, warmth, energy, bpm, mode, brightness, percussiveness]
 const catalog = {
   calm: [
-    ['5haFS5A336MN7GexZUPcv6', 'Peace Piece', 'Bill Evans', .79, .16],
-    ['71BqXMUdoiYHohiDlMihIR', 'Ambre', 'Nils Frahm', .59, .09],
-    ['6Xajr512QEGAZ20bqAWkyT', 'Near Light', 'Ólafur Arnalds', .36, .32],
-    ['0sQNqu37YQQSI3K0ueswyA', 'A Walk', 'Tycho', .70, .54]
+    ['5haFS5A336MN7GexZUPcv6', 'Peace Piece', 'Bill Evans', .79, .16, 64, 'major', .24, .14],
+    ['71BqXMUdoiYHohiDlMihIR', 'Ambre', 'Nils Frahm', .59, .09, 66, 'minor', .20, .12],
+    ['6Xajr512QEGAZ20bqAWkyT', 'Near Light', 'Ólafur Arnalds', .36, .32, 74, 'minor', .36, .26],
+    ['0sQNqu37YQQSI3K0ueswyA', 'A Walk', 'Tycho', .70, .54, 140, 'major', .56, .55]
   ],
   dream: [
-    ['68z70C4XhaXYr0UXMCmn56', 'An Ending (Ascent) - Remastered', 'Brian Eno', .44, .09],
-    ['18j0hGMYXyc296ZRw73ZAm', 'Porcelain', 'Moby', .36, .49],
-    ['0DAsxISzun85PbsqAfIzeC', 'Intro', 'The xx', .20, .65],
-    ['75IQVo8hqI1iwVZyvkN2VT', 'Show Me How', 'Men I Trust', .74, .32]
+    ['68z70C4XhaXYr0UXMCmn56', 'An Ending (Ascent) - Remastered', 'Brian Eno', .44, .09, 60, 'major', .22, .08],
+    ['18j0hGMYXyc296ZRw73ZAm', 'Porcelain', 'Moby', .36, .49, 95, 'minor', .42, .48],
+    ['0DAsxISzun85PbsqAfIzeC', 'Intro', 'The xx', .20, .65, 100, 'minor', .38, .62],
+    ['75IQVo8hqI1iwVZyvkN2VT', 'Show Me How', 'Men I Trust', .74, .32, 111, 'major', .32, .44]
   ],
   joy: [
-    ['2M45IIrFLjMgsNSSxee31h', 'Friday Morning', 'Khruangbin', .84, .35],
-    ['6pxElwU80zhjbCC77Vn8EI', 'Movie', 'Tom Misch', .63, .43],
-    ['3tsyvCHCbKdQMrJvgvGLq0', 'Tadow', 'Masego, FKJ', .71, .67],
-    ['663EKm2UaVIpWzUIlQ8jfQ', 'Get Lucky (feat. Pharrell Williams and Nile Rodgers)', 'Daft Punk, Pharrell Williams, Nile Rodgers', .91, .91]
+    ['2M45IIrFLjMgsNSSxee31h', 'Friday Morning', 'Khruangbin', .84, .35, 76, 'minor', .30, .36],
+    ['6pxElwU80zhjbCC77Vn8EI', 'Movie', 'Tom Misch', .63, .43, 94, 'major', .38, .45],
+    ['3tsyvCHCbKdQMrJvgvGLq0', 'Tadow', 'Masego, FKJ', .71, .67, 122, 'minor', .52, .72],
+    ['663EKm2UaVIpWzUIlQ8jfQ', 'Get Lucky (feat. Pharrell Williams and Nile Rodgers)', 'Daft Punk, Pharrell Williams, Nile Rodgers', .91, .91, 116, 'minor', .76, .84]
   ],
   energy: [
-    ['2t805HJ6cLjFfxstV88h5G', 'Cirrus', 'Bonobo', .44, .70],
-    ['0LPU5eeJqiujVUSck5ghpO', 'Odessa', 'Caribou', .68, .79],
-    ['3W2ZcrRsInZbjWylOi6KhZ', 'You & Me - Flume Remix', 'Disclosure, Eliza Doolittle, Flume', .33, .93],
-    ['2E9IkdYwFCx0yBvUxn01gc', 'D.A.N.C.E. (WWW)', 'Justice', .88, .95]
+    ['2t805HJ6cLjFfxstV88h5G', 'Cirrus', 'Bonobo', .44, .70, 116, 'minor', .58, .78],
+    ['0LPU5eeJqiujVUSck5ghpO', 'Odessa', 'Caribou', .68, .79, 124, 'minor', .68, .82],
+    ['3W2ZcrRsInZbjWylOi6KhZ', 'You & Me - Flume Remix', 'Disclosure, Eliza Doolittle, Flume', .33, .93, 142, 'minor', .79, .88],
+    ['2E9IkdYwFCx0yBvUxn01gc', 'D.A.N.C.E. (WWW)', 'Justice', .88, .95, 120, 'major', .86, .90]
   ]
 };
 const moods = {
@@ -132,7 +132,7 @@ export function createMusicResolver({ fetchImpl = fetch, env = process.env, now 
   }
   return async function resolve(url) {
     const {mood, variant, previous, history, candidate} = preferences(url.searchParams);
-    const [id, title, artist] = candidate;
+    const [id, title, artist, , energy, bpm, mode, brightness, percussiveness] = candidate;
     const configured = Boolean(env.SPOTIFY_CLIENT_ID && env.SPOTIFY_CLIENT_SECRET);
     let live = [];
     if (configured) {
@@ -143,12 +143,22 @@ export function createMusicResolver({ fetchImpl = fetch, env = process.env, now 
     const source = match ? 'spotify-api' : 'spotify-catalog';
     const origin = match ? 'Найдено в каталоге Spotify.' : configured ? 'Использована локальная подборка ссылок Spotify.' : 'Из локальной подборки Spotify.';
     const chosenId = match?.id || id;
+    const exact = !match || match.id === id || match.title === title;
     return { track: {
       id: chosenId, source, title: match?.title || title, artist: match?.artist || artist,
       url: spotifyUrl(chosenId), kind: 'link',
-      bpm: null, variant, reason: origin + ' Выбор для ' + moods[mood][0] + ' учитывает теплоту фотографий и энергию записи.'
+      bpm: exact ? bpm : null, ...(exact ? { bpmSource: 'catalog' } : {}),
+      energy, mode, brightness, percussiveness,
+      variant, reason: origin + ' Выбор для ' + moods[mood][0] + ' учитывает теплоту фотографий и энергию записи.'
     }};
   };
+}
+
+export function catalogProfile(id) {
+  const entry = Object.values(catalog).flat().find(row => row[0] === id);
+  if (!entry) return {bpm:null};
+  const [,title,artist,,energy,bpm,mode,brightness,percussiveness] = entry;
+  return {title, artist, energy, bpm, mode, brightness, percussiveness, source:'spotify-catalog', bpmSource:'catalog'};
 }
 
 export const resolveTrack = createMusicResolver();
@@ -160,7 +170,10 @@ export async function deezerTempo(id, fetchImpl = fetch) {
     if (!reply.ok) return { bpm: null };
     const song = await reply.json();
     if (String(song.id) !== id || !Number.isFinite(song.bpm) || song.bpm < 40 || song.bpm > 240) return { bpm: null };
-    return { bpm: song.bpm, ...(song.title ? {title: String(song.title).slice(0, 200)} : {}),
-      ...(song.artist?.name ? {artist: String(song.artist.name).slice(0, 200)} : {}) };
+    return {
+      bpm: song.bpm,
+      ...(song.title ? { title: String(song.title).slice(0, 200) } : {}),
+      ...(song.artist?.name ? { artist: String(song.artist.name).slice(0, 200) } : {})
+    };
   } catch { return { bpm: null }; }
 }

@@ -7,6 +7,9 @@ import { portablePage } from './portable.mjs';
 import { synthesizeVoice } from './voice.mjs';
 import { coverTextLimit, normalizeCoverText } from './cover-text.mjs';
 
+import { defaultMoment, momentLink } from '../public/memory.js';
+import { tempoPresets } from '../public/rhythm.js';
+
 export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
@@ -18,6 +21,10 @@ const weatherTypes = new Set(['rain_glass', 'wind_sparks', 'mist', 'warm_haze', 
 const imageMime = new Map([
   ['image/jpeg', 'jpg'], ['image/jpg', 'jpg'], ['image/png', 'png'],
   ['image/webp', 'webp'], ['image/gif', 'gif'], ['image/avif', 'avif']
+]);
+const videoMime = new Map([
+  ['video/mp4', 'mp4'], ['video/x-m4v', 'mp4'], ['video/webm', 'webm'],
+  ['video/quicktime', 'mov'], ['video/ogg', 'ogv']
 ]);
 const audioMime = new Map([
   ['audio/mpeg', 'mp3'], ['audio/mp3', 'mp3'], ['audio/mp4', 'm4a'],
@@ -64,6 +71,14 @@ export function imageFormat(bytes) {
   if (bytes.toString('ascii', 4, 8) === 'ftyp' && /avif|avis/.test(bytes.toString('ascii', 8, 40))) return 'avif';
   invalid('Файл не распознан как изображение.');
 }
+export function videoFormat(bytes) {
+  if (bytes.length >= 12 && bytes.toString('ascii', 4, 8) === 'ftyp' && !/avif|avis/.test(bytes.toString('ascii', 8, 40))) {
+    return bytes.toString('ascii', 8, 12) === 'qt  ' ? 'mov' : 'mp4';
+  }
+  if (bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) return 'webm';
+  if (bytes.length >= 4 && bytes.toString('ascii', 0, 4) === 'OggS') return 'ogv';
+  invalid('Файл не распознан как видео. Поддерживаются MP4, WebM, MOV и OGG.');
+}
 async function atomicWrite(file, data) {
   const temp = file + '.' + randomUUID() + '.tmp';
   try {
@@ -92,24 +107,83 @@ function cleanDay(input) {
     ...(weatherTypes.has(input.weatherType) ? { weatherType: input.weatherType } : {}),
     ...(['gemini', 'local-model', 'local-rules'].includes(input.analysisSource) ? { analysisSource: input.analysisSource } : {}),
     palette, warmth: score(warmth, 'теплота'), energy: score(energy, 'энергия'),
+    ...(input.photoLight != null ? { photoLight: {
+      luma: score(input.photoLight.luma, 'светлота фотографий'),
+      contrast: score(input.photoLight.contrast, 'контраст фотографий'),
+      warmth: score(input.photoLight.warmth, 'теплота фотографий')
+    } } : {}),
+    ...(input.videoMotion != null ? { videoMotion: score(input.videoMotion, 'динамика видео') } : {}),
     explanation: Array.isArray(explanation) ? explanation.slice(0, 12).map(item => stringValue(item, 1600, 'Объяснение')) : [],
     voice: Boolean(voice), favorite: Boolean(favorite)
   };
 }
+function storyQuote(day, value) {
+  const quote = stringValue(value, 220, 'Фраза из записи');
+  if (!day.text.includes(quote)) invalid('Выберите фразу из исходного рассказа.');
+  return quote;
+}
+function cleanLook(day, input) {
+  if (!['original', 'warm', 'muted'].includes(input?.tone)) invalid('Выберите оформление дня.');
+  return { tone: input.tone, quote: input.quote == null ? null : storyQuote(day, input.quote) };
+}
+function cleanMoment(day, input) {
+  const photoIndex = input?.photoIndex, startSeconds = input?.startSeconds;
+  if (!Number.isInteger(photoIndex) || !day.photos[photoIndex]) invalid('Выберите кадр дня.');
+  let max = day.track.kind === 'ambient' ? 29 : 86400;
+  if (day.track.kind === 'link' && !momentLink(day.track)?.timed) max = 0;
+  if (!Number.isInteger(startSeconds) || startSeconds < 0 || startSeconds > max) invalid('Проверьте начало музыкального фрагмента.');
+  return { title: stringValue(input.title, 64, 'Название момента'), quote: storyQuote(day, input.quote), photoIndex, startSeconds };
+}
+
+function cleanTurn(day, input) {
+  function phase(value) {
+    const photoIndex = value?.photoIndex;
+    if (!Number.isInteger(photoIndex) || !day.photos[photoIndex]) invalid('Выберите кадр для каждой фазы.');
+    return { quote: storyQuote(day, value.quote), photoIndex };
+  }
+  const before = phase(input?.before), after = phase(input?.after);
+  const nextPosition = day.text.indexOf(before.quote) + before.quote.length;
+  if (before.quote === after.quote || day.text.indexOf(after.quote, nextPosition) < 0) {
+    invalid('Выберите две разные фразы в том порядке, в котором они идут в записи.');
+  }
+  return { before, after };
+}
+
+async function readRecalls(folder) {
+  try { return JSON.parse(await readFile(path.join(folder, 'recalls.json'), 'utf8')); }
+  catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+}
+
 function cleanTrack(input) {
   if (!input || !['ambient', 'file', 'link', 'preview'].includes(input.kind)) invalid('Выберите дорожку.');
   const track = {
     title: stringValue(input.title, 200, 'Трек'), artist: stringValue(input.artist, 200, 'Исполнитель'),
     bpm: input.bpm == null ? null : score(input.bpm, 'темп', 0, 360), kind: input.kind
   };
-  if (track.kind === 'file' && ['weak', 'variable', 'ambiguous', 'steady'].includes(input.pulseStatus)) track.pulseStatus = input.pulseStatus;
-  const sources = track.kind === 'file' ? ['measured', 'manual', 'tap'] : track.kind === 'link' ? ['manual', 'tap', 'deezer'] : [];
-  if (track.bpm > 0 && sources.includes(input.bpmSource)) track.bpmSource = input.bpmSource;
+  if (track.kind === 'file' && ['weak', 'variable', 'ambiguous', 'steady'].includes(input.pulseStatus)) {
+    track.pulseStatus = input.pulseStatus;
+  }
+  const fileSources = ['measured', 'manual', 'tap'];
+  const linkSources = ['manual', 'tap', 'deezer'];
+  if (tempoPresets.some(preset => preset.bpm === track.bpm)) linkSources.push('preset');
+  if (track.bpm > 0 && ((track.kind === 'file' && fileSources.includes(input.bpmSource)) ||
+      (track.kind === 'link' && (linkSources.includes(input.bpmSource) ||
+        (input.bpmSource === 'catalog' && ['spotify-catalog', 'spotify-api'].includes(input.source)))))) {
+    track.bpmSource = input.bpmSource;
+  }
   if (input.variant !== undefined) track.variant = score(input.variant, 'вариант', 0, 1000000);
   if (input.reason) track.reason = stringValue(input.reason, 1600, 'Выбор музыки');
   if (input.energy != null) track.energy = score(input.energy, 'энергия аудио');
   if (input.brightness != null) track.brightness = score(input.brightness, 'яркость аудио');
+  if (input.percussiveness != null) track.percussiveness = score(input.percussiveness, 'ударность аудио');
+  if (Array.isArray(input.envelope) && input.envelope.length >= 16 && input.envelope.length <= 64) {
+    track.envelope = input.envelope.map(v => score(v, 'огибающая аудио'));
+  }
   if (['minor', 'major'].includes(input.mode)) track.mode = input.mode;
+  if (['file', 'ambient'].includes(track.kind)) {
+    if (input.modeConfidence != null) track.modeConfidence = score(input.modeConfidence, 'уверенность в определении лада');
+    if (input.spectralCentroidHz != null) track.spectralCentroidHz = score(input.spectralCentroidHz, 'спектральный центр', 0, 192000);
+  }
   if (input.url) track.url = httpUrl(input.url);
   if (input.kind === 'preview') track.src = httpUrl(input.src);
   if (input.kind === 'link' && !track.url) invalid('Укажите ссылку на трек.');
@@ -132,12 +206,24 @@ export async function openVault(vaultDir, publicDir) {
   let shares = {};
   try { shares = JSON.parse(await readFile(shareFile, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
+  let demo;
+  try { demo = JSON.parse(await readFile(path.join(publicDir, 'demo.json'), 'utf8')); }
+  catch (readError) { if (readError.code !== 'ENOENT') throw readError; }
   for (const dir of await readdir(vaultDir, { withFileTypes: true })) {
     if (!dir.isDirectory() || dir.name.startsWith('.')) continue;
     const folder = path.join(vaultDir, dir.name);
     const day = JSON.parse(await readFile(path.join(folder, 'memory.json'), 'utf8'));
     if (!validId(day.id) || days.has(day.id)) throw new Error('Некорректный идентификатор в ' + dir.name);
     let passportChanged = false;
+    const seed = demo?.find(entry => entry.id === day.id && entry.text === day.text);
+    if (!day.turn && seed?.turn && seed.photos.length === day.photos.length) {
+      day.turn = cleanTurn(day, seed.turn);
+      passportChanged = true;
+    }
+    if (!day.moment) {
+      day.moment = cleanMoment(day, seed?.moment || defaultMoment(day));
+      passportChanged = true;
+    }
     const spotifyId = spotifyTrackId(day.track?.url);
     if (spotifyId && day.track.id !== spotifyId) {
       day.track.id = spotifyId;
@@ -167,7 +253,11 @@ export async function openVault(vaultDir, publicDir) {
     const prefix = share ? '/shared-media/' + share + '/' : '/media/';
     const route = src => prefix + day.id + '/' + src.split('/').map(encodeURIComponent).join('/');
     return {
-      ...day, photos: day.photos.map(photo => ({ ...photo, src: route(photo.src) })),
+      ...day, photos: day.photos.map(photo => ({
+        ...photo,
+        src: route(photo.src),
+        ...(photo.poster ? { poster: route(photo.poster) } : {})
+      })),
       ...(day.voiceSrc ? { voiceSrc: route(day.voiceSrc) } : {}),
       track: day.track.kind === 'file' ? { ...day.track, src: route(day.track.src) } : day.track
     };
@@ -177,10 +267,19 @@ export async function openVault(vaultDir, publicDir) {
     const key = Object.keys(shares).find(k => shares[k] === token && (scope === 'archive' ? k === 'archive' : k.startsWith('day/')));
     return key || notFound();
   }
-  async function saveTrack(input, folder) {
+  async function saveTrack(input, folder, seed = false) {
     const track = cleanTrack(input);
     if (track.kind === 'file') {
-      const { data, ext } = unpackDataUrl(input.src, audioMime, 24 * 1024 * 1024);
+      let data, ext;
+      if (seed && typeof input.src === 'string' && input.src.startsWith('/audio/')) {
+        const root = path.resolve(publicDir, 'audio');
+        const location = path.resolve(publicDir, '.' + input.src);
+        ext = path.extname(location).slice(1).toLowerCase();
+        if (!location.startsWith(root + path.sep) || ![...audioMime.values()].includes(ext)) invalid('Путь к демоаудио недоступен.');
+        data = await readFile(location);
+      } else {
+        ({ data, ext } = unpackDataUrl(input.src, audioMime, 50 * 1024 * 1024));
+      }
       await mkdir(path.join(folder, 'audio'), { recursive: true });
       track.src = 'audio/' + randomUUID().slice(0, 12) + '.' + ext;
       await writeFile(path.join(folder, track.src), data, { flag: 'wx' });
@@ -199,27 +298,50 @@ export async function openVault(vaultDir, publicDir) {
     try {
       day.photos = [];
       for (const [index, image] of input.photos.entries()) {
-        if (!image || typeof image !== 'object') invalid('Проверьте фотографии.');
-        const name = stringValue(image.name, 255, 'Имя фотографии');
-        let data;
-        if (seed && typeof image.src === 'string' && image.src.startsWith('/images/')) {
+        if (!image || typeof image !== 'object') invalid('Проверьте медиафайлы.');
+        const name = stringValue(image.name, 255, 'Имя файла');
+        const isVideo = image.kind === 'video' || (typeof image.src === 'string' && image.src.startsWith('data:video/'));
+        const padIndex = String(index + 1).padStart(2, '0');
+        let data, ext;
+        if (isVideo) {
+          ({ data } = unpackDataUrl(image.src, videoMime, 250 * 1024 * 1024));
+          ext = videoFormat(data);
+        } else if (seed && typeof image.src === 'string' && image.src.startsWith('/images/')) {
           const root = path.resolve(publicDir, 'images');
           const location = path.resolve(publicDir, '.' + image.src);
           if (!location.startsWith(root + path.sep)) invalid('Путь к демофото недоступен.');
           data = await readFile(location);
+          ext = imageFormat(data);
         } else {
-          ({ data } = unpackDataUrl(image.src, imageMime, 12 * 1024 * 1024));
+          ({ data } = unpackDataUrl(image.src, imageMime, 50 * 1024 * 1024));
+          ext = imageFormat(data);
         }
-        const src = 'photos/' + String(index + 1).padStart(2, '0') + '.' + imageFormat(data);
+        const src = 'photos/' + padIndex + '.' + ext;
         await writeFile(path.join(staging, src), data);
-        let focus;
-        if (image.focus) {
-          focus = { x: score(image.focus.x, 'фокус'), y: score(image.focus.y, 'фокус'),
-            ratio: score(image.focus.ratio, 'пропорции фото', 1e-8, 1e8), manual: image.focus.manual === true };
+        const item = { name, src, ...(isVideo ? { kind: 'video' } : {}) };
+        if (isVideo && typeof image.poster === 'string' && image.poster.startsWith('data:image/')) {
+          const { data: posterData } = unpackDataUrl(image.poster, imageMime, 10 * 1024 * 1024);
+          const posterSrc = 'photos/' + padIndex + '-poster.' + imageFormat(posterData);
+          await writeFile(path.join(staging, posterSrc), posterData);
+          item.poster = posterSrc;
         }
-        day.photos.push({ name, src, ...(focus ? { focus } : {}) });
+        if (isVideo && Number.isFinite(image.duration) && image.duration > 0 && image.duration <= 3600) {
+          item.duration = Number(image.duration.toFixed(1));
+        }
+        if (image.focus) {
+          item.focus = {
+            x: score(image.focus.x, 'фокус'),
+            y: score(image.focus.y, 'фокус'),
+            ratio: score(image.focus.ratio, 'пропорции фото', 1e-8, 1e8),
+            manual: image.focus.manual === true
+          };
+        }
+        day.photos.push(item);
       }
-      day.track = await saveTrack(input.track, staging);
+      day.track = await saveTrack(input.track, staging, seed);
+      day.moment = cleanMoment(day, input.moment || defaultMoment(day));
+      if (input.authorLook) day.authorLook = cleanLook(day, input.authorLook);
+      if (input.turn) day.turn = cleanTurn(day, input.turn);
       if (day.voice) {
         if (await synthesizeVoice(staging, day)) day.voiceSrc = 'voiceover.wav';
         else day.voiceFallback = true;
@@ -237,22 +359,44 @@ export async function openVault(vaultDir, publicDir) {
   }
 
   // Stable seed IDs make recovery safe if the first import was interrupted.
+  // `.seeded` stores the last imported demo revision, so entries added to
+  // demo.json later reach existing vaults, while demo days the owner deleted
+  // stay deleted. The legacy content "1" means revision 1.
   const seeded = path.join(vaultDir, '.seeded');
-  try { await readFile(seeded); }
-  catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    let demo;
-    try { demo = JSON.parse(await readFile(path.join(publicDir, 'demo.json'), 'utf8')); }
-    catch (readError) { if (readError.code !== 'ENOENT') throw readError; }
-    if (demo) {
-      for (const [i, entry] of demo.entries()) await create({ ...entry, id: entry.id || 'demo-' + (i + 1) }, true);
-      await atomicWrite(seeded, '1');
+  const revisionOf = entry => Number.isInteger(entry.seedRevision) && entry.seedRevision > 0 ? entry.seedRevision : 1;
+  let imported = 0;
+  try { imported = Number.parseInt(await readFile(seeded, 'utf8'), 10) || 1; }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (Array.isArray(demo)) {
+    const latest = Math.max(imported, ...demo.map(revisionOf));
+    if (latest > imported) {
+      for (const [i, entry] of demo.entries()) {
+        if (revisionOf(entry) > imported) await create({ ...entry, id: entry.id || 'demo-' + (i + 1) }, true);
+      }
+      await atomicWrite(seeded, String(latest));
     }
+  }
+  const studies = ['last-apartment', 'office-night'].flatMap(id => {
+    const track = demo?.find(entry => entry.id === id)?.track;
+    return track?.kind === 'file' && track.src === '/audio/' + id + '.wav'
+      ? [{ ...track, studyId: id }] : [];
+  });
+  async function persistCard(item, updated) {
+    const postcard = path.join(item.folder, 'memory.html');
+    await atomicWrite(postcard, await portablePage(updated));
+    try { await atomicWrite(path.join(item.folder, 'memory.json'), pretty(updated)); }
+    catch (error) {
+      await atomicWrite(postcard, await portablePage(item.day)).catch(() => {});
+      throw error;
+    }
+    item.day = updated;
+    return view(updated);
   }
   function list(share) {
     return [...days.values()].sort((a,b) => b.day.date.localeCompare(a.day.date)).map(({day}) => view(day, share));
   }
   return {
+    studies: () => studies,
     list: () => list(), get: id => view(record(id).day), create: input => change(() => create(input)),
     setFavorite: (id, favorite) => change(async () => {
       if (typeof favorite !== 'boolean') invalid('Укажите состояние избранного.');
@@ -262,28 +406,48 @@ export async function openVault(vaultDir, publicDir) {
       item.day = updated;
       return view(updated);
     }),
+    updateMemory: (id, action, input) => change(async () => {
+      const item = record(id);
+      const update = action === 'turn' ? { turn: cleanTurn(item.day, input) }
+        : action === 'moment' ? { moment: cleanMoment(item.day, input) }
+        : { authorLook: cleanLook(item.day, input) };
+      return persistCard(item, { ...item.day, ...update });
+    }),
+    recalls: id => readRecalls(record(id).folder),
+    addRecall: (id, input) => change(async () => {
+      const { folder } = record(id);
+      if (typeof input?.id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.id)) {
+        invalid('Некорректный идентификатор заметки.');
+      }
+      const text = stringValue(input.text, 280, 'Первое впечатление');
+      const notes = await readRecalls(folder);
+      const previous = notes.find(note => note.id === input.id);
+      if (previous) return previous;
+      const note = { id: input.id, text, at: new Date().toISOString() };
+      await atomicWrite(path.join(folder, 'recalls.json'), pretty([note, ...notes]));
+      return note;
+    }),
     updateTrack: (id, input) => change(async () => {
       const item = record(id);
       const previous = item.day.track;
-      const track = await saveTrack(input, item.folder);
-      const updated = { ...item.day, track };
-      const postcard = path.join(item.folder, 'memory.html');
-      try {
-        await atomicWrite(postcard, await portablePage(updated));
-        await atomicWrite(path.join(item.folder, 'memory.json'), pretty(updated));
-      }
+      const study = input?.studyId == null ? null : studies.find(entry => entry.studyId === input.studyId);
+      if (input?.studyId != null && !study) invalid('Этюд не найден.');
+      if (study && previous.studyId === study.studyId) return view(item.day);
+      const track = await saveTrack(study || input, item.folder, Boolean(study));
+      if (study) track.studyId = study.studyId;
+      const sameLink = track.kind === 'link' && previous.kind === 'link' && track.url === previous.url;
+      const updated = { ...item.day, track, moment: sameLink ? item.day.moment : { ...item.day.moment, startSeconds: 0 } };
+      try { await persistCard(item, updated); }
       catch (error) {
-        await atomicWrite(postcard, await portablePage(item.day)).catch(() => {});
         if (track.kind === 'file') await rm(path.join(item.folder, track.src), { force: true }).catch(() => {});
         throw error;
       }
-      item.day = updated;
       if (previous.kind === 'file') await rm(path.join(item.folder, previous.src), { force: true }).catch(() => {});
       return view(updated);
     }),
     zip: id => change(async () => {
       const { day, folder } = record(id);
-      const names = ['memory.html', 'memory.json', 'entry.txt', ...day.photos.map(p => p.src)];
+      const names = ['memory.html', 'memory.json', 'entry.txt', ...day.photos.flatMap(p => p.poster ? [p.src, p.poster] : [p.src])];
       if (day.track.kind === 'file') names.push(day.track.src);
       if (day.voiceSrc) names.push(day.voiceSrc);
       const dirname = path.basename(folder);
@@ -296,7 +460,7 @@ export async function openVault(vaultDir, publicDir) {
         if (key !== 'archive' && key !== 'day/' + id) notFound();
       }
       const { day, folder } = record(id);
-      if (!day.photos.some(p => p.src === file) && !(day.track.kind === 'file' && day.track.src === file) && day.voiceSrc !== file) notFound();
+      if (!day.photos.some(p => p.src === file || p.poster === file) && !(day.track.kind === 'file' && day.track.src === file) && day.voiceSrc !== file) notFound();
       return path.join(folder, file);
     },
     getShare: key => {

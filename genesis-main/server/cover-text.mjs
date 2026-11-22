@@ -13,19 +13,4 @@ export function normalizeCoverText(value) {
   return line && Array.from(line).length <= coverTextLimit ? line : null;
 }
 
-export function quoteFragments(text) {
-  const result = [];
-  // The model selects an index. This keeps every displayed quote traceable to
-  // the author's words, even when the model would paraphrase their wording.
-  for (const { segment } of new Intl.Segmenter('ru', { granularity: 'sentence' }).segment(text)) {
-    let left = segment.trim();
-    while (left.length > 220) {
-      const boundary = left.slice(0, 220).search(/\s+\S*$/u);
-      const cut = boundary >= 90 ? boundary : 220;
-      result.push(left.slice(0, cut).trim());
-      left = left.slice(cut).trim();
-    }
-    if (left) result.push(left);
-  }
-  return result;
-}
+export { quoteFragments } from '../public/memory.js';

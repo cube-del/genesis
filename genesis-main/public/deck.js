@@ -6,12 +6,15 @@ const clamp = (value, last) => Math.max(0, Math.min(last, Number.isInteger(value
 
 function photoName(photo, index) {
   const name = (photo.name || '').replace(/\.[a-z0-9]{2,5}$/i, '').replace(/[_]+/g, ' ').trim();
-  return name || 'Фотография ' + (index + 1);
+  const isVid = photo.kind === 'video' || /\.(?:mp4|webm|mov|m4v|ogv)(?:$|\?)/i.test(photo.src || '');
+  return name || (isVid ? 'Видео ' : 'Фотография ') + (index + 1);
 }
 
 function getItems(day, days) {
   const photos = (day.photos || []).map((photo, index) => ({
-    src: photo.src, title: photoName(photo, index), photoIndex: index,
+    src: photo.poster || photo.src,
+    videoSrc: (photo.kind === 'video' || /\.(?:mp4|webm|mov|m4v|ogv)(?:$|\?)/i.test(photo.src || '')) ? photo.src : '',
+    title: photoName(photo, index), photoIndex: index,
   })).filter(item => item.src);
   if (photos.length !== 1) return { items: photos, isDays: false };
   const permitted = new Map();
@@ -23,7 +26,9 @@ function getItems(day, days) {
   const items = [...permitted.values()]
     .sort((a, b) => String(b.date).localeCompare(String(a.date)))
     .map(memory => ({
-      src: memory.photos[0].src, title: memory.title, memory,
+      src: memory.photos[0].poster || memory.photos[0].src,
+      videoSrc: memory.photos[0].kind === 'video' ? memory.photos[0].src : '',
+      title: memory.title, memory,
     }));
   return { items, isDays: true };
 }
@@ -77,9 +82,15 @@ export function mountDeck(host, { day, days = [], readOnly = false, onPickPhoto,
       if (!button) {
         button = document.createElement('button');
         button.type = 'button'; button.className = 'deck-thumb'; button.dataset.index = index;
-        const img = document.createElement('img');
-        img.alt = ''; img.draggable = false; img.decoding = 'async'; img.src = item.src;
-        button.append(img);
+        if (item.videoSrc && item.src === item.videoSrc) {
+          const vid = document.createElement('video');
+          vid.muted = true; vid.playsInline = true; vid.preload = 'metadata'; vid.src = item.videoSrc;
+          button.append(vid);
+        } else {
+          const img = document.createElement('img');
+          img.alt = ''; img.draggable = false; img.decoding = 'async'; img.src = item.src;
+          button.append(img);
+        }
         const after = [...fan.children].find(child => Number(child.dataset.index) > index);
         fan.insertBefore(button, after || null);
       }

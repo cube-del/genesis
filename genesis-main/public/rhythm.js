@@ -1,5 +1,8 @@
 export const minManualBpm = 40;
 export const maxManualBpm = 240;
+export const tempoPresets = [
+  { label: 'Медленная', bpm: 64 }, { label: 'Умеренная', bpm: 96 }, { label: 'Быстрая', bpm: 144 }
+];
 const beatsPerPhoto = 8;
 const fallbackMs = 8000;
 
@@ -15,12 +18,14 @@ export function tempoLabel(track) {
     if (track?.pulseStatus === 'variable') return 'Нет уверенной оценки единого темпа';
     return track?.kind === 'file' ? 'Темп не определён' : 'Темп не указан';
   }
-  const value = track.bpm.toLocaleString('ru-RU', {maximumFractionDigits: 1}) + ' BPM';
+  const value = track.bpm.toLocaleString('ru-RU', { maximumFractionDigits: 1 }) + ' BPM';
   const source = track.bpmSource || (track.kind === 'file' ? 'measured' : '');
   if (source === 'measured') return 'Измерено ≈ ' + value;
   if (source === 'deezer') return 'По данным Deezer · ' + value;
   if (source === 'tap') return 'По вашим ударам · ' + value;
+  if (source === 'preset') return 'По ощущению автора · ≈ ' + value;
   if (source === 'manual') return 'Задано вручную · ' + value;
+  if (source === 'catalog') return 'Каталог · ' + value;
   return value;
 }
 

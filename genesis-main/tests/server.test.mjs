@@ -68,6 +68,30 @@ function unzip(archive) {
   return files;
 }
 
+test('этюды можно прослушать до сохранения, а выбор переносит WAV и его профиль в папку дня', async t => {
+  const {client} = await fixture(t, false, {publicDir:path.resolve(import.meta.dirname, '../public')});
+  assert.equal((await client.request('/api/music/studies')).status,403);
+  await client.request('/');
+  const created=await (await client.request('/api/days','POST',example)).json();
+  const url='/api/days/'+created.id;
+  const studies=await (await client.request('/api/music/studies')).json();
+  assert.deepEqual(studies.map(track=>track.bpm),[82,132]);
+  const audio=await (await client.request(studies[1].src)).arrayBuffer();
+  assert.deepEqual((await (await client.request(url)).json()).track,created.track);
+  assert.equal((await client.request(url+'/track','PUT',{track:{studyId:'missing'}})).status,400);
+  const save=()=>client.request(url+'/track','PUT',{track:{studyId:studies[1].studyId}});
+  const updated=await (await save()).json();
+  assert.equal(updated.track.bpm,132);
+  assert.deepEqual(updated.photos,created.photos);
+  assert.equal(updated.text,created.text);
+  assert.equal((await (await save()).json()).track.src,updated.track.src);
+  const files=unzip(Buffer.from(await (await client.request(url+'/zip')).arrayBuffer()));
+  const stored=JSON.parse(files.get('memory.json'));
+  assert.equal(stored.track.studyId,studies[1].studyId);
+  assert.deepEqual(files.get(stored.track.src),Buffer.from(audio));
+  assert.ok(files.get('memory.html').toString().includes(studies[1].title));
+});
+
 test('импорт Google Фото ограничивает выбор, сохраняет байты выбранных фото и закрывает сессию', async t => {
   const calls = [];
   const { client } = await fixture(t, false, { googlePhotosClientId: 'test-client', googlePhotosFetch: async (address, options) => {
@@ -87,7 +111,7 @@ test('импорт Google Фото ограничивает выбор, сохр
         { type: 'PHOTO', mediaFile: { filename: 'big.jpg', baseUrl: 'https://lh3.googleusercontent.com/big' } }
       ] });
     }
-    if (url.pathname === '/big=d') return new Response('large', { headers: { 'content-length': String(13 * 1024 * 1024) } });
+    if (url.pathname === '/big=d') return new Response('large', { headers: { 'content-length': String(51 * 1024 * 1024) } });
     if (url.href === 'https://lh3.googleusercontent.com/picture=d') return Response.redirect('https://lh3.googleusercontent.com/content', 302);
     assert.equal(url.href, 'https://lh3.googleusercontent.com/content');
     return new Response(Buffer.from(image, 'base64'));
@@ -256,17 +280,26 @@ test('загруженная аудиодорожка попадает в ZIP, �
   wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(16000, 28); wav.writeUInt16LE(2, 32);
   wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(2, 40);
   const track = {kind:'file', title:'Личная запись', artist:'Автор', bpm:null, mode:'minor', energy:.2,
-    brightness:.32, src:'data:audio/wav;base64,' + wav.toString('base64')};
-  const day = await (await client.request('/api/days', 'POST', {...example, track})).json();
+    brightness:.32, percussiveness:.18, modeConfidence:.71, spectralCentroidHz:706,
+    src:'data:audio/wav;base64,' + wav.toString('base64')};
+  const photoLight = { luma:.78, contrast:.11, warmth:.72 };
+  const day = await (await client.request('/api/days', 'POST', {...example, photoLight, track})).json();
   const archiveUrl = '/api/days/' + day.id + '/zip';
   const archive = unzip(Buffer.from(await (await client.request(archiveUrl)).arrayBuffer()));
   const passport = JSON.parse(archive.get('memory.json'));
   assert.equal(passport.track.mode, 'minor');
+  assert.deepEqual(passport.photoLight, photoLight);
+  for (const property of ['brightness', 'percussiveness', 'modeConfidence', 'spectralCentroidHz']) {
+    assert.equal(passport.track[property], track[property]);
+  }
   assert.deepEqual(archive.get(passport.track.src), wav);
   assert.ok(archive.get('memory.html').toString().includes(passport.track.src));
   await client.request('/api/days/' + day.id + '/track', 'PUT', {track: example.track});
   assert.equal((await client.request(day.track.src)).status, 404);
   const updated = unzip(Buffer.from(await (await client.request(archiveUrl)).arrayBuffer()));
+  const replacement = JSON.parse(updated.get('memory.json'));
+  assert.deepEqual(replacement.photoLight, photoLight);
+  assert.equal(replacement.track.spectralCentroidHz, undefined);
   assert.ok(!updated.has(passport.track.src));
   assert.ok(updated.get('memory.html').toString().includes(example.track.title));
 });
@@ -300,4 +333,262 @@ test('доступ по токену ограничен выбранными д�
   assert.notEqual(await tokenOf(api), token);
   await tokenOf('/api/share/archive', false);
   assert.equal((await client.request(archive.days[0].photos[0].src)).status, 404);
+});
+
+test('later demo revisions reach an existing vault with bundled audio and keep deleted demo days deleted', async t => {
+  const { client, dir, publicDir } = await fixture(t, true);
+  assert.equal(await readFile(path.join(dir, '.seeded'), 'utf8'), '1');
+  const wav = Buffer.alloc(46);
+  wav.write('RIFF', 0); wav.writeUInt32LE(38, 4); wav.write('WAVEfmt ', 8);
+  wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(16000, 28); wav.writeUInt16LE(2, 32);
+  wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(2, 40);
+  await mkdir(path.join(publicDir, 'audio'));
+  await writeFile(path.join(publicDir, 'audio', 'pair.wav'), wav);
+  const demos = JSON.parse(await readFile(path.join(publicDir, 'demo.json'), 'utf8'));
+  const track = { kind: 'file', title: 'Пара', artist: 'DayTrace', bpm: 82, bpmSource: 'measured', src: '/audio/pair.wav',
+    brightness: .24, percussiveness: .4, mode: 'major', modeConfidence: .74, spectralCentroidHz: 476 };
+  demos.push({ ...demos[0], id: 'control-pair', seedRevision: 2, track });
+  await writeFile(path.join(publicDir, 'demo.json'), JSON.stringify(demos));
+  const removed = (await readdir(dir)).find(name => name.endsWith('_sample-0'));
+  await rm(path.join(dir, removed), { recursive: true });
+  await client.close();
+  for (let restart = 0; restart < 2; restart++) {
+    const next = await listen(dir, publicDir);
+    try {
+      const list = await (await next.request('/api/days')).json();
+      assert.equal(list.length, 6);
+      assert.ok(!list.some(day => day.id === 'sample-0'));
+      const pair = list.find(day => day.id === 'control-pair');
+      assert.equal(pair.seedRevision, undefined);
+      assert.equal(pair.track.spectralCentroidHz, 476);
+      assert.deepEqual(Buffer.from(await (await next.request(pair.track.src)).arrayBuffer()), wav);
+      assert.equal(await readFile(path.join(dir, '.seeded'), 'utf8'), '2');
+    } finally { await next.close(); }
+  }
+});
+
+test('standalone memory.html bundles postcardLayout, drawPostcardDesign and parametric recipe without runtime errors', async t => {
+  const { client } = await fixture(t);
+  await client.request('/');
+  const linkTrack = {
+    kind: 'link', url: 'https://open.spotify.com/track/3W2ZcrRsInZbjWylOi6KhZ',
+    source: 'spotify-catalog', title: 'You & Me', artist: 'Disclosure',
+    bpm: 142, bpmSource: 'catalog', mode: 'minor', energy: .93, brightness: .79, percussiveness: .88
+  };
+  const created = await (await client.request('/api/days', 'POST', { ...example, track: linkTrack, voice: true })).json();
+  assert.equal(created.track.bpm, 142);
+  assert.equal(created.track.bpmSource, 'catalog');
+  assert.equal(created.track.percussiveness, .88);
+  const archive = unzip(Buffer.from(await (await client.request('/api/days/' + created.id + '/zip')).arrayBuffer()));
+  const page = archive.get('memory.html').toString();
+  assert.match(page, /const postcardLayout=/);
+  assert.match(page, /const drawPostcardDesign=/);
+  assert.match(page, /--card-paper:/);
+  assert.match(page, /--plate-w:/);
+  assert.match(page, /--photo-filter:saturate\(/);
+  assert.match(page, /Тембр «/);
+  const scriptMatch = page.match(/<script type="module">([\s\S]+)<\/script>/);
+  assert.ok(scriptMatch);
+  // Execute the embedded drawPostcardDesign and drawSoundSignature with a minimal 2D mock context to verify zero ReferenceError.
+  const calls = [];
+  const ctx = new Proxy({}, { get: (_, prop) => (...args) => calls.push([prop, args.length]) });
+  const runner = new Function('ctx',
+    scriptMatch[1].replace(/\(\s*async function openPostcard[\s\S]*$/, 'return { postcardLayout, drawPostcardDesign, drawSoundSignature };')
+  );
+  const { postcardLayout: layoutFn, drawPostcardDesign: drawFn, drawSoundSignature: sigFn } = runner(ctx);
+  const recipeArg = JSON.parse(scriptMatch[1].match(/drawPostcardDesign,\s*(\{[\s\S]+\})\)$/)?.[1] || 'null');
+  assert.ok(recipeArg && Number.isFinite(recipeArg.whitespace) && recipeArg.envelope.length === 56);
+  const box = layoutFn(880, 1100, recipeArg);
+  assert.ok(box.w > 0 && box.h > 0);
+  drawFn(ctx, 880, 1100, recipeArg);
+  sigFn(ctx, 880, 1100, recipeArg, 0.5);
+  assert.ok(calls.some(([name]) => name === 'stroke'));
+});
+
+test('video upload saves MP4/WebM + poster, streams with Range 206, exports in ZIP and renders video in memory.html', async t => {
+  const { client } = await fixture(t);
+  await client.request('/');
+  const mp4 = Buffer.concat([Buffer.from([0, 0, 0, 20]), Buffer.from('ftypisom'), Buffer.from([0, 0, 2, 0, 1, 2, 3, 4])]);
+  const webm = Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x86, 0x81, 0x01, 0x42, 0xf7, 0x81, 0x01]);
+  const videoPhotos = [
+    { name: 'улица.mp4', kind: 'video', src: 'data:video/mp4;base64,' + mp4.toString('base64'), poster: 'data:image/png;base64,' + image, duration: 11.4 },
+    { name: 'вечер.webm', kind: 'video', src: 'data:video/webm;base64,' + webm.toString('base64'), duration: 6.2 }
+  ];
+  const res = await client.request('/api/days', 'POST', { ...example, videoMotion: 0.72, photos: videoPhotos });
+  assert.equal(res.status, 201);
+  const day = await res.json();
+  assert.equal(day.videoMotion, 0.72);
+  assert.equal(day.photos[0].kind, 'video');
+  assert.equal(day.photos[0].duration, 11.4);
+  assert.ok(day.photos[0].poster.endsWith('/photos/01-poster.png'));
+  const ranged = await client.request(day.photos[0].src, 'GET', undefined, { range: 'bytes=0-11' });
+  assert.equal(ranged.status, 206);
+  assert.equal(ranged.headers.get('content-type'), 'video/mp4');
+  assert.equal(ranged.headers.get('accept-ranges'), 'bytes');
+  assert.deepEqual(Buffer.from(await ranged.arrayBuffer()), mp4.subarray(0, 12));
+  const webmRes = await client.request(day.photos[1].src);
+  assert.equal(webmRes.status, 200);
+  assert.equal(webmRes.headers.get('content-type'), 'video/webm');
+  const archive = unzip(Buffer.from(await (await client.request('/api/days/' + day.id + '/zip')).arrayBuffer()));
+  assert.deepEqual(archive.get('photos/01.mp4'), mp4);
+  assert.deepEqual(archive.get('photos/01-poster.png'), Buffer.from(image, 'base64'));
+  assert.deepEqual(archive.get('photos/02.webm'), webm);
+  const page = archive.get('memory.html').toString();
+  assert.match(page, /<video[^>]+src="photos\/01\.mp4"[^>]+poster="photos\/01-poster\.png"/);
+  const bad = await client.request('/api/days', 'POST', {
+    ...example, photos: [{ name: 'fake.mp4', kind: 'video', src: 'data:video/mp4;base64,' + Buffer.from('not-a-video-file').toString('base64') }]
+  });
+  assert.equal(bad.status, 400);
+});
+
+test('импорт Google Фото скачивает видео через =dv и сохраняет его в день', async t => {
+  const mp4 = Buffer.concat([Buffer.from([0, 0, 0, 20]), Buffer.from('ftypisom'), Buffer.from([0, 0, 2, 0, 1, 2, 3, 4])]);
+  const { client } = await fixture(t, false, { googlePhotosClientId: 'test-client', googlePhotosFetch: async (address) => {
+    const url = new URL(address);
+    if (url.pathname === '/v1/sessions') return Response.json({ id: 'pick-v', pickerUri: 'https://photos.google.com/picker/v' });
+    if (url.pathname === '/v1/sessions/pick-v') return Response.json({ mediaItemsSet: true });
+    if (url.pathname === '/v1/mediaItems') {
+      return Response.json({ mediaItems: [{ type: 'VIDEO', mediaFile: { filename: 'прогулка.mp4', baseUrl: 'https://lh3.googleusercontent.com/vid1' } }] });
+    }
+    if (url.href === 'https://lh3.googleusercontent.com/vid1=dv') return Response.redirect('https://rr1.googlevideo.com/videoplayback?id=1', 302);
+    assert.equal(url.href, 'https://rr1.googlevideo.com/videoplayback?id=1');
+    return new Response(mp4);
+  } });
+  await client.request('/');
+  const auth = { authorization: 'Bearer tok' };
+  const session = await (await client.request('/api/google-photos/sessions', 'POST', { limit: 2 }, auth)).json();
+  const res = await (await client.request('/api/google-photos/sessions/' + session.id + '/photos', 'GET', undefined, auth)).json();
+  assert.deepEqual(res, {
+    photos: [{ name: 'прогулка.mp4', kind: 'video', src: 'data:video/mp4;base64,' + mp4.toString('base64') }],
+    skipped: []
+  });
+  assert.equal((await client.request('/api/days', 'POST', { ...example, photos: res.photos })).status, 201);
+});
+
+test('маршрут Deezer BPM, точка фокуса кадра и ручной ритм сохраняются в день и открытку', async t => {
+  const { client } = await fixture(t, false, {
+    deezerFetch: async url => {
+      assert.equal(url, 'https://api.deezer.com/track/1109737');
+      return Response.json({ id: 1109737, bpm: 104.4, title: 'Veridis Quo', artist: { name: 'Daft Punk' } });
+    }
+  });
+  await client.request('/');
+  const dz = await (await client.request('/api/music/deezer/1109737')).json();
+  assert.deepEqual(dz, { bpm: 104.4, title: 'Veridis Quo', artist: 'Daft Punk' });
+  const focus = { x: 0.2, y: 0.72, ratio: 1.5, manual: true };
+  const payload = {
+    ...example,
+    photos: [{ ...example.photos[0], focus }],
+    track: { kind: 'link', url: 'https://www.deezer.com/track/1109737', title: dz.title, artist: dz.artist, bpm: 104.4, bpmSource: 'deezer' }
+  };
+  const created = await (await client.request('/api/days', 'POST', payload)).json();
+  assert.deepEqual(created.photos[0].focus, focus);
+  assert.equal(created.track.bpmSource, 'deezer');
+  const archive = unzip(Buffer.from(await (await client.request('/api/days/' + created.id + '/zip')).arrayBuffer()));
+  assert.match(archive.get('memory.html').toString(), /object-position:/);
+  const miniWav = Buffer.from('RIFF$\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x40\x1f\x00\x00\x80\x3e\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00', 'binary');
+  const tapped = await (await client.request('/api/days', 'POST', {
+    ...example,
+    track: { kind: 'file', src: 'data:audio/wav;base64,' + miniWav.toString('base64'), title: 'Ритм', artist: 'Я', bpm: 120, bpmSource: 'tap', pulseStatus: 'variable' }
+  })).json();
+  assert.equal(tapped.track.bpmSource, 'tap');
+  assert.equal(tapped.track.pulseStatus, 'variable');
+});
+
+test('авторская обложка и момент сохраняются вместе, открываются по ссылке и попадают в ZIP', async t => {
+  const {client, dir, publicDir} = await fixture(t);
+  await client.request('/');
+  const created = await (await client.request('/api/days','POST',example)).json();
+  const route = '/api/days/' + created.id;
+  const look = {tone:'warm', quote:'Прохладный ветер.'};
+  const moment = {title:'Ветер у воды', quote:look.quote, photoIndex:0, startSeconds:5};
+  const responses = await Promise.all([
+    client.request(route + '/author-look','PUT',look),
+    client.request(route + '/moment','PUT',moment)
+  ]);
+  assert.deepEqual(responses.map(r => r.status), [200,200]);
+  assert.equal((await client.request(route + '/author-look','PUT',{...look, quote:'Чужая фраза'})).status,400);
+  assert.equal((await client.request(route + '/moment','PUT',{...moment, photoIndex:2})).status,400);
+  const share = await (await client.request('/api/share/day/' + created.id,'PUT',{enabled:true})).json();
+  const token = new URL(share.url).pathname.split('/').pop();
+  const shared = await (await client.request('/api/public/day/' + token)).json();
+  assert.deepEqual(shared.days[0].moment,moment);
+  assert.deepEqual(shared.days[0].authorLook,look);
+  const files = unzip(Buffer.from(await (await client.request(route + '/zip')).arrayBuffer()));
+  assert.deepEqual(JSON.parse(files.get('memory.json')).moment,moment);
+  assert.equal(files.get('entry.txt').toString(),example.text);
+  assert.match(files.get('memory.html').toString(),/<p class="cover-caption">Прохладный ветер\.<\/p>/);
+  assert.match(files.get('memory.html').toString(),/<button id="open-moment">Ветер у воды/);
+  await client.close();
+  const next = await listen(dir,publicDir);
+  try {
+    const restored = await (await next.request(route)).json();
+    assert.deepEqual(restored.authorLook,look);
+    assert.deepEqual(restored.moment,moment);
+  } finally { await next.close(); }
+});
+
+test('смена песни сохраняет источник темпа и сбрасывает позицию только при смене записи', async t => {
+  const {client} = await fixture(t);
+  await client.request('/');
+  const track = {kind:'link', url:'https://youtu.be/abcdef12345', title:'Песня',artist:'Автор',bpm:64,bpmSource:'preset'};
+  const day = await (await client.request('/api/days','POST',{...example,track})).json();
+  const url = '/api/days/' + day.id;
+  assert.equal(day.track.bpmSource,'preset');
+  await client.request(url + '/moment','PUT',{...day.moment,startSeconds:11});
+  const same = await (await client.request(url + '/track','PUT',{track:{...track,bpm:144}})).json();
+  assert.equal(same.moment.startSeconds,11);
+  const files = unzip(Buffer.from(await (await client.request(url+'/zip')).arrayBuffer()));
+  assert.match(files.get('memory.html').toString(),/embed\/abcdef12345\?start=11&amp;end=19/);
+  const changed = await (await client.request(url + '/track','PUT',{track:{...track,url:'https://example.org/other'}})).json();
+  assert.equal(changed.moment.startSeconds,0);
+  assert.equal(changed.moment.quote,same.moment.quote);
+  const known = await (await client.request('/api/music/spotify/5haFS5A336MN7GexZUPcv6')).json();
+  assert.equal(known.bpmSource,'catalog');
+  assert.equal(known.bpm,64);
+  const unknown = await (await client.request('/api/music/spotify/aaaaaaaaaaaaaaaaaaaaaa')).json();
+  assert.equal(unknown.bpm,null);
+});
+
+test('поворот сохраняется с дословными фразами и переносится в автономную открытку', async t => {
+  const {client} = await fixture(t);
+  await client.request('/');
+  const original = await (await client.request('/api/days','POST',{...example, analysisSource:'gemini'})).json();
+  const route = '/api/days/' + original.id;
+  const turn = {before:{quote:'Тихий вечер у реки.',photoIndex:0},after:{quote:'Прохладный ветер.',photoIndex:0}};
+  assert.equal((await client.request(route + '/turn','PUT',{...turn,before:turn.after,after:turn.before})).status,400);
+  assert.equal((await client.request(route + '/turn','PUT',{...turn,after:{...turn.after,quote:'Выдуманная фраза'}})).status,400);
+  const result = await client.request(route + '/turn','PUT',turn);
+  assert.equal(result.status,200);
+  assert.equal((await result.json()).analysisSource,'gemini');
+  assert.deepEqual((await (await client.request(route)).json()).turn,turn);
+  const zip = unzip(Buffer.from(await (await client.request(route + '/zip')).arrayBuffer()));
+  assert.match(zip.get('memory.html').toString(),/Поворот дня.*data-turn-position/su);
+});
+
+test('первое впечатление сохраняется один раз и остаётся в личной папке дня', async t => {
+  const {client, dir, publicDir} = await fixture(t);
+  await client.request('/');
+  const day = await (await client.request('/api/days','POST',example)).json();
+  const route = '/api/days/' + day.id;
+  const recall = {id:'87d21d83-4be4-4cc7-b3ff-9e970b989b50',text:'Вспомнился холод перил.'};
+  const requests = await Promise.all([client.request(route+'/recall','POST',recall),client.request(route+'/recall','POST',recall)]);
+  assert.deepEqual(requests.map(response => response.status),[201,201]);
+  const [first, retry] = await Promise.all(requests.map(response => response.json()));
+  assert.deepEqual(first,retry);
+  assert.deepEqual(await (await client.request(route+'/recall')).json(),[first]);
+  const share = await (await client.request('/api/share/day/'+day.id,'PUT',{enabled:true})).json();
+  const token = new URL(share.url).pathname.split('/').pop();
+  const shared = await client.request('/api/public/day/'+token);
+  assert.ok(!(await shared.text()).includes(recall.text));
+  const zip = unzip(Buffer.from(await (await client.request(route + '/zip')).arrayBuffer()));
+  assert.ok(!zip.has('recalls.json'));
+  assert.ok(!(zip.get('memory.html').toString().includes(recall.text)));
+  await client.close();
+  const next = await listen(dir,publicDir);
+  try {
+    await next.request('/');
+    assert.deepEqual(await (await next.request(route+'/recall')).json(),[first]);
+  } finally { await next.close(); }
 });

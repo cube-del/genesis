@@ -33,24 +33,31 @@ export function findFocus(pixels, size, ratio) {
   return focus;
 }
 
-export function imageFocus(img) {
+export function imageFocus(source) {
   const size = 48, canvas = document.createElement('canvas');
   canvas.width = canvas.height = size;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   ctx.fillStyle = 'white'; ctx.fillRect(0, 0, size, size);
-  ctx.drawImage(img, 0, 0, size, size);
-  return findFocus(ctx.getImageData(0, 0, size, size).data, size, img.naturalWidth / img.naturalHeight);
+  ctx.drawImage(source, 0, 0, size, size);
+  const w = source.naturalWidth || source.videoWidth || source.width || 1;
+  const h = source.naturalHeight || source.videoHeight || source.height || 1;
+  return findFocus(ctx.getImageData(0, 0, size, size).data, size, w / h);
 }
 
 // x and y are fractions of the overflow, shared by object-position, Canvas and WebGL.
-export function frameComposition(photo, mood) {
+export function frameComposition(photo, mood, targetRatio = .8) {
   const f = photo?.focus;
-  if (!f) return { x: .5, y: .5, top: false, align: 'left' };
+  if (!f || !Number.isFinite(f.x) || !Number.isFinite(f.y) || !Number.isFinite(f.ratio) || f.ratio <= 0) {
+    return { x: .5, y: .5, top: false, align: 'left' };
+  }
   const top = f.y > .57 || (mood === 'dream' && f.y > .43);
   const align = f.x < .41 ? 'right' : mood === 'joy' && f.x <= .6 ? 'center' : 'left';
   const position = (focus, visible, target) => visible >= 1 ? .5 :
     Math.min(1, Math.max(0, (focus - target * visible) / (1 - visible)));
-  const crop = .8 / f.ratio;
-  return { x: position(f.x, Math.min(1, crop), align === 'right' ? .34 : .61),
-    y: position(f.y, Math.min(1, 1 / crop), top ? .69 : .32), top, align };
+  const crop = targetRatio / f.ratio;
+  return {
+    x: position(f.x, Math.min(1, crop), align === 'right' ? .34 : .61),
+    y: position(f.y, Math.min(1, 1 / crop), top ? .69 : .32),
+    top, align
+  };
 }

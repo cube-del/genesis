@@ -1,19 +1,29 @@
 import { closeModal, esc, icon, modal } from './ui.js';
 
 export const imageTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/avif', 'image/gif']);
-export const maxPhotoBytes = 12 * 1024 * 1024;
-const extensions = { jpg: 'jpeg', jpeg: 'jpeg', png: 'png', webp: 'webp', avif: 'avif', gif: 'gif' };
+export const videoTypes = new Set(['video/mp4', 'video/webm', 'video/quicktime', 'video/ogg', 'video/x-m4v']);
+export const maxPhotoBytes = 50 * 1024 * 1024;
+export const maxVideoBytes = 250 * 1024 * 1024;
+const imageExt = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', avif: 'image/avif', gif: 'image/gif' };
+const videoExt = { mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', ogv: 'video/ogg' };
+
+export function detectMediaMime(file) {
+  if (imageTypes.has(file.type) || videoTypes.has(file.type)) return file.type;
+  const ext = (file.name || '').split('.').pop().toLowerCase();
+  return imageExt[ext] || videoExt[ext] || '';
+}
 
 export function chooseFolderPhotos(raw, limit, onChoose) {
   const path = file => file.webkitRelativePath || file.name;
   const files = [];
   for (const file of raw) {
-    if (!file.size || file.size > maxPhotoBytes) continue;
-    if (imageTypes.has(file.type)) files.push({ file, path: path(file) });
-    else if (!file.type) {
-      const type = extensions[file.name.split('.').pop().toLowerCase()];
-      if (type) files.push({ file: new File([file], file.name, { type: 'image/' + type }), path: path(file) });
-    }
+    if (!file.size) continue;
+    const mime = detectMediaMime(file);
+    if (!mime) continue;
+    const isVideo = videoTypes.has(mime);
+    if (file.size > (isVideo ? maxVideoBytes : maxPhotoBytes)) continue;
+    const normalized = file.type === mime ? file : new File([file], file.name, { type: mime });
+    files.push({ file: normalized, isVideo, path: path(file) });
   }
   files.sort((a, b) => a.path.localeCompare(b.path, 'ru', { numeric: true }));
   const skipped = raw.length - files.length;
@@ -23,7 +33,7 @@ export function chooseFolderPhotos(raw, limit, onChoose) {
   const pageSize = 24;
   let page = 0, urls = [];
   function release() { urls.forEach(url => URL.revokeObjectURL(url)); urls = []; }
-  const body = modal(files[0].path.split('/')[0], '<p class="dialog-lead">Выберите снимки для дня. Свободных мест — ' + limit + '.</p>' +
+  const body = modal(files[0].path.split('/')[0], '<p class="dialog-lead">Выберите фото или видео для дня. Свободных мест — ' + limit + '.</p>' +
     '<div class="folder-photos"></div><div class="folder-actions"><div class="folder-pages"><button type="button" class="icon-button" data-prev aria-label="Предыдущая страница">' + icon('chevron-left', 17) + '</button><span data-page></span><button type="button" class="icon-button" data-next aria-label="Следующая страница">' + icon('chevron-right', 17) + '</button></div>' +
     '<button class="button primary" type="button" data-add disabled></button></div>', { wide: true, onClose: release });
   const grid = body.querySelector('.folder-photos'), add = body.querySelector('[data-add]');
@@ -40,7 +50,10 @@ export function chooseFolderPhotos(raw, limit, onChoose) {
     release();
     grid.innerHTML = files.slice(page * pageSize, (page + 1) * pageSize).map((item, i) => {
       const url = URL.createObjectURL(item.file); urls.push(url);
-      return '<label title="' + esc(item.path) + '"><input type="checkbox" value="' + (page * pageSize + i) + '"><img loading="lazy" src="' + esc(url) + '" alt=""><span>' + esc(item.file.name) + '</span></label>';
+      const media = item.isVideo
+        ? '<video src="' + esc(url) + '" muted preload="metadata" playsinline></video><em class="folder-video-tag">ВИДЕО</em>'
+        : '<img loading="lazy" src="' + esc(url) + '" alt="">';
+      return '<label title="' + esc(item.path) + '"><input type="checkbox" value="' + (page * pageSize + i) + '">' + media + '<span>' + esc(item.file.name) + '</span></label>';
     }).join('');
     prev.disabled = !page;
     next.disabled = (page + 1) * pageSize >= files.length;

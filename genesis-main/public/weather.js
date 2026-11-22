@@ -120,8 +120,9 @@ function drawMotes(ctx, particles, w, h, time, warm) {
   }
 }
 
-export function mountDayWeather(host, day) {
-  const sky = skyFor(day);
+export function mountDayWeather(host, day, recipe) {
+  const sky = recipe.weatherType;
+  let speed=recipe.particleSpeed;
   const random = seededRandom(String(day.id || day.date || '') + sky);
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('2d', { alpha: true });
@@ -130,7 +131,8 @@ export function mountDayWeather(host, day) {
   const texture = context && ['warm_haze','mist'].includes(sky) ? cloudTexture(random, sky === 'warm_haze') : null;
   const particles = Array.from({length: 190}, () => ({ x: random(), y: random(), phase: random() * tau, depth: random() }));
   let width = 0, height = 0, visible = [], frame = 0, timer = 0, last = -Infinity, done = false;
-  let sizeObserver;
+  let sizeObserver, highBoost = 0, smoothBoost = 0, simTime = 0, lastSimNow = performance.now();
+  const cursor = { x: 0, y: 0, strength: 0, target: 0 };
   const start = performance.now();
   host.classList.add('dt-day-weather');
   host.dataset.sky = sky;
@@ -146,6 +148,19 @@ export function mountDayWeather(host, day) {
       if (texture) drawClouds(context, texture, width, height, seconds, sky === 'warm_haze');
       if (sky !== 'mist') drawMotes(context, visible, width, height, seconds, sky === 'warm_haze');
     }
+    cursor.strength += (cursor.target - cursor.strength) * .16;
+    if (cursor.strength > .02) {
+      context.save();
+      context.globalCompositeOperation = 'destination-out';
+      const radius = Math.min(width, height) * .22;
+      const hole = context.createRadialGradient(cursor.x, cursor.y, radius * .12, cursor.x, cursor.y, radius);
+      hole.addColorStop(0, `rgba(0,0,0,${(.92 * cursor.strength).toFixed(3)})`);
+      hole.addColorStop(.55, `rgba(0,0,0,${(.45 * cursor.strength).toFixed(3)})`);
+      hole.addColorStop(1, 'rgba(0,0,0,0)');
+      context.fillStyle = hole;
+      context.beginPath(); context.arc(cursor.x, cursor.y, radius, 0, tau); context.fill();
+      context.restore();
+    }
   }
   function size() {
     const rect = host.getBoundingClientRect();
@@ -156,7 +171,7 @@ export function mountDayWeather(host, day) {
     canvas.height = Math.max(1, Math.round(height * ratio));
     context?.setTransform(ratio, 0, 0, ratio, 0, 0);
     visible = particles.slice(0, Math.max(16, Math.round(width * height / (sky === 'rain_glass' ? 6800 : 12500))));
-    paint(reduced.matches ? 0 : (performance.now() - start) / 1000);
+    paint(reduced.matches ? 0 : simTime);
   }
   function destroy() {
     if (done) return;
@@ -180,11 +195,15 @@ export function mountDayWeather(host, day) {
     const elapsed = now - start;
     if (elapsed >= duration) return destroy();
     if (now - last >= frameTime - 1) {
+      const dt = Math.min(0.1, Math.max(0, (now - lastSimNow) / 1000));
+      lastSimNow = now;
       last = now;
+      smoothBoost += (highBoost - smoothBoost) * 0.14;
+      simTime += dt * speed * (1 + smoothBoost * 0.35);
       const enter = smooth(Math.min(1, elapsed / 680));
       const leave = smooth(Math.min(1, Math.max(0, (duration - elapsed) / 2600)));
       host.style.opacity = String((.16 + .84 * enter) * leave);
-      paint(elapsed / 1000);
+      paint(simTime);
     }
     frame = window.requestAnimationFrame(animate);
   }
@@ -192,6 +211,7 @@ export function mountDayWeather(host, day) {
     window.cancelAnimationFrame(frame);
     if (done || document.hidden) return;
     if (performance.now() - start >= duration) return destroy();
+    lastSimNow = performance.now();
     if (reduced.matches || !context) {
       host.style.opacity = '.27';
       paint(0);
@@ -206,5 +226,10 @@ export function mountDayWeather(host, day) {
   reduced.addEventListener('change', resume);
   timer = window.setTimeout(destroy, duration + 30);
   resume();
-  return { destroy };
+  return {
+    destroy,
+    setSpeed(value) { speed = value; },
+    setHighBoost(value) { highBoost = Math.max(0, Math.min(1, Number(value) || 0)); },
+    setCursor(x, y, active) { cursor.x = x; cursor.y = y; cursor.target = active ? 1 : 0; }
+  };
 }
